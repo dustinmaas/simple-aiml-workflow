@@ -1,0 +1,129 @@
+diff --git a/.env b/.env
+index 75fcad8..f2ac5ab 100644
+--- a/.env
++++ b/.env
+@@ -53,3 +53,11 @@ RTMGR_SIM_PORT=12020
+ # version is git branch name
+ XAPP_PY_FRAME_VER=${SC_RIC_VERSION}
+ XAPP_PY_RUNNER_IP=10.0.2.20
++
++# InfluxDB Time Series Database
++INFLUXDB_IP=10.0.2.25
++INFLUXDB_PORT=8086
++
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 59f7732..c2a6d8e 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,5 +1,3 @@
+-version: '3.9'
+-
+ services:
+   dbaas:
+     container_name: ric_dbaas
+@@ -10,6 +8,50 @@ services:
+       ric_network:
+         ipv4_address: ${DBAAS_IP:-10.0.2.12}
+ 
++  influxdb:
++    container_name: ric_influxdb
++    hostname: influxdb
++    image: influxdb:2.7
++    ports:
++      - "8086:8086"
++    environment:
++      - DOCKER_INFLUXDB_INIT_MODE=setup
++      - DOCKER_INFLUXDB_INIT_USERNAME=ric_admin
++      - DOCKER_INFLUXDB_INIT_PASSWORD=ric_password
++      - DOCKER_INFLUXDB_INIT_ORG=ric
++      - DOCKER_INFLUXDB_INIT_BUCKET=network_metrics
++      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=ric_admin_token
++    volumes:
++      - influxdb-data:/var/lib/influxdb2
++    networks:
++      ric_network:
++        ipv4_address: ${INFLUXDB_IP:-10.0.2.25}
++
+   rtmgr_sim:
+     container_name: ric_rtmgr_sim
+     hostname: rtmgr_sim
+@@ -73,8 +115,8 @@ services:
+     hostname: e2term
+     image: nexus3.o-ran-sc.org:10002/o-ran-sc/ric-plt-e2:${E2TERM_VER}
+     #Uncomment ports to use the RIC from outside the docker network.
+-    #ports:
+-    #  - "36421:36421/sctp"
++    ports:
++      - "36421:36421/sctp"
+     env_file:
+       - .env
+     environment:
+@@ -171,14 +213,24 @@ services:
+       - type: bind
+         source: ./xApps/python
+         target: /opt/xApps
++      - type: bind
++        source: /opt/data
++        target: /opt/data
++
+       # Uncomment if you want to use your local ric-plt-xapp-frame-py copy inside the container
+       #- type: bind
+       #  source: ./Path/to/your/local/ric-plt-xapp-frame-py
+       #  target: /opt/ric-plt-xapp-frame-py
++    ports:
++      - 61611:61611
+     networks:
+       ric_network:
+         ipv4_address: ${XAPP_PY_RUNNER_IP:-10.0.2.20}
+ 
++volumes:
++  influxdb-data:
++
+ networks:
+   ric_network:
+     ipam:
+diff --git a/ric/images/ric-plt-xapp-frame-py/Dockerfile b/ric/images/ric-plt-xapp-frame-py/Dockerfile
+index 5ddd4de..0c3c10d 100644
+--- a/ric/images/ric-plt-xapp-frame-py/Dockerfile
++++ b/ric/images/ric-plt-xapp-frame-py/Dockerfile
+@@ -35,7 +35,7 @@ RUN chmod -R 755 /usr/local/lib/librmr_si.so
+ RUN chmod -R 755 /usr/local/lib/libriclibe2ap.so
+ 
+ # Install required Python modules
+-RUN pip install --upgrade pip && pip install certifi six python_dateutil setuptools urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl asn1tools
++RUN pip install --upgrade pip && pip install certifi six python_dateutil setuptools urllib3 logger requests inotify_simple mdclogpy google-api-python-client msgpack ricsdl asn1tools Flask jsonify
+ 
+ RUN mkdir -p /opt/xApps && chmod -R 755 opt/xApps
+ RUN mkdir -p /opt/ric/config && chmod -R 755 /opt/ric/config
+diff --git a/xApps/python/lib/e2sm_rc_module.py b/xApps/python/lib/e2sm_rc_module.py
+index 92dd1f6..df12513 100644
+--- a/xApps/python/lib/e2sm_rc_module.py
++++ b/xApps/python/lib/e2sm_rc_module.py
+@@ -38,10 +38,8 @@ class e2sm_rc_module(object):
+         payload = bytes(hex_num for hex_num in msg)
+         return payload
+ 
+-    def send_control_request_style_2_action_6(self, e2_node_id, ue_id, min_prb_ratio, max_prb_ratio, dedicated_prb_ratio, ack_request=1):
+-        plmn_string = "00101"
+-        sst = 1
+-        sd = 1
++    def send_control_request_style_2_action_6(self, e2_node_id, ue_id, sst, sd, min_prb_ratio, max_prb_ratio, dedicated_prb_ratio, ack_request=1):
++        plmn_string = "99999"
+ 
+         # PLMN encoding
+         PLMN = plmn_string_to_bcd(plmn_string)
+diff --git a/xApps/python/lib/xAppBase.py b/xApps/python/lib/xAppBase.py
+index 8ef4c31..88d99a4 100644
+--- a/xApps/python/lib/xAppBase.py
++++ b/xApps/python/lib/xAppBase.py
+@@ -22,8 +22,8 @@ class SubscriptionWrapper(object):
+         self.callback_func = None
+ 
+ class xAppBase(object):
+-    def __init__(self, config=None, http_server_port=8090, rmr_port=4560, rmr_flags=0x00):
+-        super(xAppBase, self).__init__()
++    def __init__(self, config=None, http_server_port=8090, rmr_port=4560, rmr_flags=0x00, **kwargs):
++        super(xAppBase, self).__init__(**kwargs)
+         # Default Config
+         self.xAPP_IP = "10.0.2.20"
+         self.MY_HTTP_SERVER_ADDRESS = "0.0.0.0"     # bind to all interfaces
