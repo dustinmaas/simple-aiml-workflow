@@ -1,0 +1,3 @@
+[submodule "oran-sc-ric"]
+	path = oran-sc-ric
+	url = https://github.com/srsran/oran-sc-ric.git
