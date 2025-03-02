@@ -1,0 +1,1 @@
+runs experiment to collect data according to experiment description. later, we will add the ability to close the loop by using inference results from the inference-server.

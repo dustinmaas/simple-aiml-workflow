@@ -1,0 +1,83 @@
+# This docker compose file will stand up the analysis and training environment, 
+# the inference server, and the model server, or run the experiment-runner.
+
+services:
+  # Model Server - Stores and serves PyTorch models
+  model-server:
+    build:
+      context: ./model-server
+      dockerfile: Dockerfile
+    container_name: model-server
+    volumes:
+      - model-data:/app/models
+    ports:
+      - "5000:5000"
+    networks:
+      - aiml-network
+    restart: unless-stopped
+
+  # Inference Server - Provides inference API for models
+  inference-server:
+    build:
+      context: ./inference-server
+      dockerfile: Dockerfile
+    container_name: inference-server
+    depends_on:
+      - model-server
+    environment:
+      - MODEL_SERVER_URL=http://model-server:5000
+    ports:
+      - "8888:8888"
+    networks:
+      - aiml-network
+      - oran-sc-ric_ric_network
+    restart: unless-stopped
+
+  # Analysis and Training Environment - Jupyter Lab for data analysis and model training
+  analysis-and-training:
+    build:
+      context: ./analysis-and-training
+      dockerfile: Dockerfile
+    container_name: analysis-and-training
+    volumes:
+      - ./analysis-and-training/notebooks:/app/notebooks
+      - ./analysis-and-training/data:/app/data
+      - model-data:/app/models
+    ports:
+      - "8889:8888"
+    networks:
+      - aiml-network
+      - oran-sc-ric_ric_network
+    restart: unless-stopped
+
+  # Experiment Runner - Runs experiments against the RIC platform
+  experiment-runner:
+    build:
+      context: ./experiment-runner
+      dockerfile: Dockerfile
+    container_name: experiment-runner
+    volumes:
+      - ./experiment-runner:/app
+      - /var/tmp/simple-aiml-workflow/oran-sc-ric:/var/tmp/simple-aiml-workflow/oran-sc-ric
+      - /var/tmp/srsRAN_Project:/var/tmp/srsRAN_Project
+      - /opt/data:/opt/data
+      - ~/.ssh:/root/.ssh:ro
+    environment:
+      - INFLUXDB_URL=http://10.0.2.25:8086
+      - ML_INFERENCE_URL=http://inference-server:8888
+    networks:
+      - aiml-network
+      - oran-sc-ric_ric_network
+    # The experiment runner is not started by default
+    # To run it: docker compose run experiment-runner --config=test
+    profiles:
+      - experiment
+
+networks:
+  aiml-network:
+    driver: bridge
+  oran-sc-ric_ric_network:
+    external: true
+
+volumes:
+  model-data:

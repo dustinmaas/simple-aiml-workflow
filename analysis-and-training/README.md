@@ -1,0 +1,1 @@
+This will be an analysis and model training environment that a user can use to manually analyse data, create a model, train it, then send the trained model to the model-server. It will use a jupyter server and pytorch.

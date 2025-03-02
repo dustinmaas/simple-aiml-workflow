@@ -1,0 +1,2 @@
+presents a restful api that takes min_prb_ratio and RSRP data from experiment-runner and responds with pytorch inference of min_prb_ratio. exeriment-runner sends model id as well.
+gets models from model-server. use flask for api.

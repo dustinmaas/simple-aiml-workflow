@@ -1,0 +1,4 @@
+requests>=2.25.0
+fabric>=2.6.0
+influxdb-client>=1.19.0
+pytest>=6.2.4 
