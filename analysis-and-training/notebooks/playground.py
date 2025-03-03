@@ -13,16 +13,15 @@
 # ---
 
 # %%
-# %matplotlib inline
-import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 import torch
 import numpy as np
-from typing import Optional
 import os
 import tempfile
 import requests
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
 
 # %%
 from influxdb_client import InfluxDBClient
@@ -32,12 +31,12 @@ client = InfluxDBClient(url="http://10.0.2.25:8086", token="ric_admin_token", or
 
 
 
-experiment_id = "exp_1740883750"
+experiment_id = "exp_1741030459"
 # Query data
 query = '''
 from(bucket: "network_metrics")
-  |> range(start: -120h)
-  |> filter(fn: (r) => r.experiment_id == "exp_1740883750")
+  |> range(start: -12h)
+  |> filter(fn: (r) => r.experiment_id == "exp_1741030459")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> keep(columns: ["timestamp", "ue_id", "atten", "min_prb_ratio", "CQI", "RSRP", "DRB.UEThpDl", "DRB.RlcSduTransmittedVolumeDL"])
 '''
@@ -94,18 +93,127 @@ ue1_df.describe()
 
 # %%
 # get a general idea of what the relevant data points look like
-ue1_df.plot(x='timestamp', y=['atten', 'CQI', 'RSRP', 'DRB.UEThpDl', 'min_prb_ratio'])
+# Create a Plotly time series figure for all metrics
+fig = go.Figure()
+
+# Add each metric as a separate trace
+fig.add_trace(go.Scatter(x=ue1_df['timestamp'], y=ue1_df['atten'], mode='lines', name='atten'))
+fig.add_trace(go.Scatter(x=ue1_df['timestamp'], y=ue1_df['CQI'], mode='lines', name='CQI'))
+fig.add_trace(go.Scatter(x=ue1_df['timestamp'], y=ue1_df['RSRP'], mode='lines', name='RSRP'))
+fig.add_trace(go.Scatter(x=ue1_df['timestamp'], y=ue1_df['DRB.UEThpDl'], mode='lines', name='DRB.UEThpDl (Mbps)'))
+fig.add_trace(go.Scatter(x=ue1_df['timestamp'], y=ue1_df['min_prb_ratio'], mode='lines', name='min_prb_ratio'))
+
+# Update layout
+fig.update_layout(
+    title='Time Series of Network Metrics',
+    xaxis_title='Timestamp',
+    yaxis_title='Value',
+    legend_title='Metrics',
+    hovermode='x unified'
+)
+
+# Add range slider
+fig.update_layout(
+    xaxis=dict(
+        rangeselector=dict(
+            buttons=list([
+                dict(count=1, label="1h", step="hour", stepmode="backward"),
+                dict(count=6, label="6h", step="hour", stepmode="backward"),
+                dict(count=12, label="12h", step="hour", stepmode="backward"),
+                dict(count=1, label="1d", step="day", stepmode="backward"),
+                dict(step="all")
+            ])
+        ),
+        rangeslider=dict(visible=True),
+        type="date"
+    )
+)
+
+fig.show()
 
 # %%
 # Tput vs. CQI and min prb ratio
 # note the transient values at the ratio switch points (95 -> 50 is the most egregious) 
-sns.relplot(data=ue1_df, x='CQI', y='DRB.UEThpDl', col='min_prb_ratio')
+# Create a function to make a scatter plot for a specific min_prb_ratio value
+def make_scatter_for_prb(df, prb_value):
+    df_filtered = df[df['min_prb_ratio'] == prb_value]
+    return go.Scatter(
+        x=df_filtered['CQI'],
+        y=df_filtered['DRB.UEThpDl'],
+        mode='markers',
+        name=f'min_prb_ratio = {prb_value}',
+        marker=dict(
+            size=8,
+            opacity=0.7,
+        ),
+        hovertemplate='CQI: %{x}<br>Throughput: %{y:.2f} Mbps<extra></extra>'
+    )
+
+# Get unique min_prb_ratio values
+unique_prb_values = sorted(ue1_df['min_prb_ratio'].unique())
+
+# Create subplot grid with one subplot per min_prb_ratio value
+fig = make_subplots(
+    rows=1, 
+    cols=len(unique_prb_values),
+    subplot_titles=[f'min_prb_ratio = {val}' for val in unique_prb_values],
+    shared_yaxes=True
+)
+
+# Add a scatter trace for each min_prb_ratio value
+for i, prb_value in enumerate(unique_prb_values):
+    fig.add_trace(
+        make_scatter_for_prb(ue1_df, prb_value),
+        row=1, 
+        col=i+1
+    )
+
+# Update layout
+fig.update_layout(
+    title='Throughput vs. CQI by min_prb_ratio',
+    height=500,
+    width=200 * len(unique_prb_values),
+    showlegend=False
+)
+
+# Update axes labels
+for i in range(len(unique_prb_values)):
+    fig.update_xaxes(title_text="CQI", row=1, col=i+1)
+    if i == 0:  # Only add y-axis title to the first subplot
+        fig.update_yaxes(title_text="Throughput (Mbps)", row=1, col=i+1)
+
+fig.show()
 
 # %%
 # another view
 data = ue1_df[['CQI','DRB.UEThpDl', 'min_prb_ratio']]
-sns.pairplot(data=data, hue='DRB.UEThpDl')
-#sns.pairplot(data=data)
+
+# Create a scatter matrix with Plotly
+# Use Plotly Express for pairplot equivalent
+fig = px.scatter_matrix(
+    data,
+    dimensions=["CQI", "DRB.UEThpDl", "min_prb_ratio"],
+    color="DRB.UEThpDl",
+    color_continuous_scale=px.colors.sequential.Viridis,
+    opacity=0.8,
+    title="Scatter Matrix (Pair Plot) of Network Metrics"
+)
+
+# Update layout
+fig.update_layout(
+    width=800,
+    height=800,
+    plot_bgcolor='white'
+)
+
+# Update traces
+fig.update_traces(
+    diagonal_visible=False,
+    showupperhalf=False,
+    marker=dict(size=5)
+)
+
+fig.show()
 
 # %%
 # device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
@@ -273,9 +381,8 @@ with torch.no_grad():
 
 
 # %%
-# look at the poor hyperplane fit
-from mpl_toolkits.mplot3d import Axes3D
-# %matplotlib inline
+# look at the hyperplane fit
+
 # Get the learned parameters
 learned_weights = model.linear.weight.data.cpu().numpy()
 learned_bias = model.linear.bias.data.cpu().numpy()
@@ -288,17 +395,14 @@ print(f"y_scaled = {learned_weights[0][0]:.2f}*x1_scaled + {learned_weights[0][1
 features_scaled = (X.cpu().numpy() - model.x_mean.cpu().numpy()) / model.x_std.cpu().numpy()
 targets_scaled = (y.cpu().numpy() - model.y_mean.cpu().numpy()) / model.y_std.cpu().numpy()
 
-# Plot the data and the learned hyperplane using UNSCALED values
-fig = plt.figure(figsize=(10, 8))
-ax = fig.add_subplot(111, projection='3d')
-
 # Get original unscaled data
 features_unscaled = X.cpu().numpy()
 targets_unscaled = y.cpu().numpy()
 
-# Scatter plot of the unscaled data points (sampling every 5th point)
-ax.scatter(features_unscaled[::5,0], features_unscaled[::5,1], targets_unscaled[::5], 
-           c='r', marker='o', s=2)
+# Sample every 5th point for clarity in the scatter plot
+sample_indices = np.arange(0, len(features_unscaled), 5)
+features_sampled = features_unscaled[sample_indices]
+targets_sampled = targets_unscaled[sample_indices]
 
 # Create a meshgrid for the hyperplane using unscaled feature ranges
 x1_range = np.linspace(features_unscaled[:,0].min(), features_unscaled[:,0].max(), 20)
@@ -315,25 +419,58 @@ Y_predicted_scaled = learned_weights[0][0] * X1_scaled + learned_weights[0][1] *
 # Convert predictions back to unscaled space
 Y_predicted_unscaled = Y_predicted_scaled * model.y_std.cpu().numpy()[0, 0] + model.y_mean.cpu().numpy()[0, 0]
 
-# Plot the learned hyperplane in unscaled space
-surf = ax.plot_surface(X1, X2, Y_predicted_unscaled, alpha=0.5, color='blue')
+# Create Plotly figure
+fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scene'}]])
 
-# Set labels and title
-ax.set_xlabel('CQI')
-ax.set_ylabel('DRB.UEThpDL (Mbps)')
-ax.set_zlabel('min_prb_ratio')
-ax.set_title('Hyperplane Fit (Unscaled Values)')
+# Add scatter plot for data points
+scatter = go.Scatter3d(
+    x=features_sampled[:,0],
+    y=features_sampled[:,1],
+    z=targets_sampled.flatten(),
+    mode='markers',
+    marker=dict(
+        size=2,
+        color='red',
+        opacity=0.8
+    ),
+    name='Data Points',
+    hovertemplate='CQI: %{x:.2f}<br>Throughput: %{y:.2f} Mbps<br>min_prb_ratio: %{z:.2f}<extra></extra>'
+)
+fig.add_trace(scatter)
 
-# Create a custom legend
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
-legend_elements = [
-    Line2D([0], [0], marker='o', color='w', markerfacecolor='r', markersize=8, label='Data Points'),
-    Patch(facecolor='blue', edgecolor='blue', alpha=0.5, label='Learned Hyperplane')
-]
-ax.legend(handles=legend_elements)
+# Add surface plot for the hyperplane
+surface = go.Surface(
+    x=X1, 
+    y=X2, 
+    z=Y_predicted_unscaled,
+    colorscale='Blues',
+    opacity=0.7,
+    showscale=False,
+    name='Predicted Hyperplane',
+    hovertemplate='CQI: %{x:.2f}<br>Throughput: %{y:.2f} Mbps<br>Predicted min_prb_ratio: %{z:.2f}<extra></extra>'
+)
+fig.add_trace(surface)
 
-# Show the plot
-plt.show()
+# Update layout with labels and title
+fig.update_layout(
+    title='Hyperplane Fit (Unscaled Values)',
+    scene=dict(
+        xaxis_title='CQI',
+        yaxis_title='DRB.UEThpDL (Mbps)',
+        zaxis_title='min_prb_ratio',
+        aspectmode='auto'
+    ),
+    legend=dict(
+        y=0.99,
+        x=0.01,
+        font=dict(size=12)
+    ),
+    margin=dict(l=0, r=0, b=0, t=30),
+    width=800,
+    height=600
+)
+
+# Show the interactive plot
+fig.show()
 # %%
 
