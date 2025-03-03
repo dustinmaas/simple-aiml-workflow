@@ -258,7 +258,6 @@ else:
 
 # %%
 # generate some predictions across a range of input vals
-model.eval()
 with torch.no_grad():
     test_input = np.zeros((10 * 16, 2))
     for ii in range(10):
@@ -267,7 +266,7 @@ with torch.no_grad():
     test_input = torch.tensor(test_input, dtype=torch.float).to(device)
     
     # Make prediction with denormalization
-    predicted = model(test_input, denormalize=True)
+    predicted = loaded_model(test_input, denormalize=True)
     
     print(f'Predicted values:')
     print(np.concatenate((test_input.cpu().numpy(), predicted.cpu().numpy()), axis=1))
@@ -281,33 +280,58 @@ from mpl_toolkits.mplot3d import Axes3D
 learned_weights = model.linear.weight.data.cpu().numpy()
 learned_bias = model.linear.bias.data.cpu().numpy()
 
-# Print the learned hyperplane equation
-print("\nLearned Hyperplane:")
-print(f"y = {learned_weights[0][0]:.2f}*x1 + {learned_weights[0][1]:.2f}*x2 + {learned_bias[0]:.2f}")
+# Print the learned hyperplane equation (in scaled space)
+print("\nLearned Hyperplane (in scaled space):")
+print(f"y_scaled = {learned_weights[0][0]:.2f}*x1_scaled + {learned_weights[0][1]:.2f}*x2_scaled + {learned_bias[0]:.2f}")
 
-# Plot the data and the learned hyperplane
+# Create scaled versions of features and targets using the model's normalization parameters
+features_scaled = (X.cpu().numpy() - model.x_mean.cpu().numpy()) / model.x_std.cpu().numpy()
+targets_scaled = (y.cpu().numpy() - model.y_mean.cpu().numpy()) / model.y_std.cpu().numpy()
+
+# Plot the data and the learned hyperplane using UNSCALED values
 fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
 
-# Scatter plot of the data points
+# Get original unscaled data
+features_unscaled = X.cpu().numpy()
+targets_unscaled = y.cpu().numpy()
 
-ax.scatter(features_scaled[::5,0], features_scaled[::5,1], targets_scaled, c='r', marker='o', label='Data Points', s=2)
+# Scatter plot of the unscaled data points (sampling every 5th point)
+ax.scatter(features_unscaled[::5,0], features_unscaled[::5,1], targets_unscaled[::5], 
+           c='r', marker='o', s=2)
 
-# Create a meshgrid for the hyperplane
-x1_range = np.linspace(features_scaled[::5,0].min(), features_scaled[::5,0].max(), 20)
-x2_range = np.linspace(features_scaled[::5,1].min(), features_scaled[::5,1].max(), 20)
+# Create a meshgrid for the hyperplane using unscaled feature ranges
+x1_range = np.linspace(features_unscaled[:,0].min(), features_unscaled[:,0].max(), 20)
+x2_range = np.linspace(features_unscaled[:,1].min(), features_unscaled[:,1].max(), 20)
 X1, X2 = np.meshgrid(x1_range, x2_range)
-Y_predicted_scaled = learned_weights[0][0] * X1 + learned_weights[0][1] * X2 + learned_bias[0]
 
-# Plot the learned hyperplane
-ax.plot_surface(X1, X2, Y_predicted_scaled, alpha=0.5, label='Learned Hyperplane')
+# Convert meshgrid to scaled space for prediction
+X1_scaled = (X1 - model.x_mean.cpu().numpy()[0, 0]) / model.x_std.cpu().numpy()[0, 0]
+X2_scaled = (X2 - model.x_mean.cpu().numpy()[0, 1]) / model.x_std.cpu().numpy()[0, 1]
+
+# Calculate predictions in scaled space
+Y_predicted_scaled = learned_weights[0][0] * X1_scaled + learned_weights[0][1] * X2_scaled + learned_bias[0]
+
+# Convert predictions back to unscaled space
+Y_predicted_unscaled = Y_predicted_scaled * model.y_std.cpu().numpy()[0, 0] + model.y_mean.cpu().numpy()[0, 0]
+
+# Plot the learned hyperplane in unscaled space
+surf = ax.plot_surface(X1, X2, Y_predicted_unscaled, alpha=0.5, color='blue')
 
 # Set labels and title
-ax.set_xlabel('CQI (scaled)')
-ax.set_ylabel('DRB.UEThpDL (scaled)')
-ax.set_zlabel('min_prb_ratio (scaled)')
-ax.set_title('Hyperplane Fit')
-ax.legend()
+ax.set_xlabel('CQI')
+ax.set_ylabel('DRB.UEThpDL (Mbps)')
+ax.set_zlabel('min_prb_ratio')
+ax.set_title('Hyperplane Fit (Unscaled Values)')
+
+# Create a custom legend
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+legend_elements = [
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='r', markersize=8, label='Data Points'),
+    Patch(facecolor='blue', edgecolor='blue', alpha=0.5, label='Learned Hyperplane')
+]
+ax.legend(handles=legend_elements)
 
 # Show the plot
 plt.show()

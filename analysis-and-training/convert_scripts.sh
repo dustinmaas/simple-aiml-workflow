@@ -1,10 +1,13 @@
 #!/bin/bash
 # Convert Python scripts to Jupyter notebooks
 
+NOTEBOOKS_DIR="/app/notebooks"
+
 # Create notebooks directory if it doesn't exist
-mkdir -p /app/notebooks
+mkdir -p "$NOTEBOOKS_DIR"
 
-# Convert influxdb_data_analysis.py to notebook
-jupyter nbconvert --to notebook --execute --output-dir=/app/notebooks /app/data_analysis.py
-
-echo "Conversion complete - notebooks available in /app/notebooks" 
+# Convert Python scripts to notebooks using jupytext
+for nb in $(ls /app/notebooks/*.py); do
+    echo "Converting $nb to ${nb%.py}.ipynb"
+    jupytext --to notebook "$nb" --output "${nb%.py}.ipynb"
+done
