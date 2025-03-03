@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.8-slim
 
 WORKDIR /app
 
@@ -17,9 +17,13 @@ RUN uv pip install --system --no-cache -r requirements.txt
 # Copy application code
 COPY . /app/
 
-# Make the script executable
-RUN chmod +x runner.py
+# Set execute permissions for scripts
+RUN chmod +x /app/run_experiment.py
+RUN chmod +x /app/test_torch_inference.py
 
-# Set the entrypoint
-ENTRYPOINT ["python", "runner.py"]
-CMD ["--config=default"] 
+# Set an environment variable for the model server URL
+ENV MODEL_SERVER_URL=http://model-server:5000
+ENV INFERENCE_SERVER_URL=http://inference-server:5000
+
+# Run the experiment script when the container starts
+CMD ["python", "/app/run_experiment.py"] 

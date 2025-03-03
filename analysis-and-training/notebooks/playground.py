@@ -1,0 +1,315 @@
+# ---
+# jupyter:
+#   jupytext:
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.16.7
+#   kernelspec:
+#     display_name: Python 3 (ipykernel)
+#     language: python
+#     name: python3
+# ---
+
+# %%
+# %matplotlib inline
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+import torch
+import numpy as np
+from typing import Optional
+import os
+import tempfile
+import requests
+
+# %%
+from influxdb_client import InfluxDBClient
+
+# Connect to InfluxDB
+client = InfluxDBClient(url="http://10.0.2.25:8086", token="ric_admin_token", org="ric")
+
+
+
+experiment_id = "exp_1740883750"
+# Query data
+query = '''
+from(bucket: "network_metrics")
+  |> range(start: -120h)
+  |> filter(fn: (r) => r.experiment_id == "exp_1740883750")
+  |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  |> keep(columns: ["timestamp", "ue_id", "atten", "min_prb_ratio", "CQI", "RSRP", "DRB.UEThpDl", "DRB.RlcSduTransmittedVolumeDL"])
+'''
+
+result = client.query_api().query_data_frame(query=query)
+
+
+# Convert columns to appropriate data types
+result['ue_id'] = result['ue_id'].astype(int)
+result['atten'] = result['atten'].astype(int) 
+result['min_prb_ratio'] = result['min_prb_ratio'].astype(int)
+result['CQI'] = result['CQI'].astype(int)
+result['RSRP'] = result['RSRP'].astype(int)
+result['DRB.UEThpDl'] = result['DRB.UEThpDl'].astype(float)
+result['DRB.RlcSduTransmittedVolumeDL'] = result['DRB.RlcSduTransmittedVolumeDL'].astype(float)
+result['timestamp'] = pd.to_datetime(result['timestamp'])
+
+# Convert to pandas DataFrame
+df = pd.DataFrame(result)
+df
+
+# Drop InfluxDB metadata columns
+df.drop(columns=['result', 'table'], inplace=True)
+df
+
+
+# %%
+# in Mbps
+df['DRB.UEThpDl'] = df['DRB.UEThpDl'] / 1000.0
+df['DRB.RlcSduTransmittedVolumeDL'] = df['DRB.RlcSduTransmittedVolumeDL'] / 1000.0
+df.describe()
+df
+
+
+
+# %%
+
+# grab ue1 data
+ue1_df = df[df['ue_id'] == 1].copy()
+
+# fix default min_prb_ratio at start (better to fix in experiment runner
+# ue1_df['min_prb_ratio'] = ue1_df['min_prb_ratio'].replace(0, 50)
+print(ue1_df.dtypes)
+ue1_df
+
+# %%
+ue1_df.describe()
+
+# %%
+# working on filtering out transient vals (not done)
+# ue1_df['min_thp_per'] = df.groupby('min_prb_ratio')['DRB.UEThpDl'].transform('min')
+# ue1_df[ue1_df['min_prb_ratio'] == 50]
+#ue1_df[ue1_df['DRB.UEThpDl'] == ue1_df['min_thp_per']].to_string()
+
+# %%
+# get a general idea of what the relevant data points look like
+ue1_df.plot(x='timestamp', y=['atten', 'CQI', 'RSRP', 'DRB.UEThpDl', 'min_prb_ratio'])
+
+# %%
+# Tput vs. CQI and min prb ratio
+# note the transient values at the ratio switch points (95 -> 50 is the most egregious) 
+sns.relplot(data=ue1_df, x='CQI', y='DRB.UEThpDl', col='min_prb_ratio')
+
+# %%
+# another view
+data = ue1_df[['CQI','DRB.UEThpDl', 'min_prb_ratio']]
+sns.pairplot(data=data, hue='DRB.UEThpDl')
+#sns.pairplot(data=data)
+
+# %%
+# device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+# print(f"device {device}")
+device = 'cpu'
+
+features = data[['CQI','DRB.UEThpDl']].values
+targets = data[['min_prb_ratio']].values
+
+
+# Convert features and targets to PyTorch tensors
+X = torch.tensor(features, dtype=torch.float32)
+y = torch.tensor(targets, dtype=torch.float32)
+
+# %%
+class LinearRegressionModel(torch.nn.Module):
+    def __init__(self):
+        super(LinearRegressionModel, self).__init__()
+        self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
+        self.register_buffer('x_mean', torch.zeros(2))
+        self.register_buffer('x_std', torch.ones(2))
+        self.register_buffer('y_mean', torch.zeros(1))
+        self.register_buffer('y_std', torch.ones(1))
+
+    def forward(self, x: torch.Tensor, denormalize: bool = False) -> torch.Tensor:
+        x_scaled = (x - self.x_mean) / self.x_std
+        output = self.linear(x_scaled)
+        if denormalize == True:  # Explicit comparison for TorchScript compatibility
+            output = output * self.y_std + self.y_mean
+        return output
+    
+    # Add methods to make TorchScript serializable
+    def __getstate__(self):
+        return {
+            'linear.weight': self.linear.weight,
+            'linear.bias': self.linear.bias,
+            'x_mean': self.x_mean,
+            'x_std': self.x_std,
+            'y_mean': self.y_mean,
+            'y_std': self.y_std
+        }
+    
+    def __setstate__(self, state):
+        self.__init__()
+        self.linear.weight.data.copy_(state['linear.weight'])
+        self.linear.bias.data.copy_(state['linear.bias'])
+        self.x_mean.copy_(state['x_mean'])
+        self.x_std.copy_(state['x_std'])
+        self.y_mean.copy_(state['y_mean'])
+        self.y_std.copy_(state['y_std'])
+        
+    # Add a scripting method to convert the model to TorchScript
+    def to_torchscript(self):
+        self.eval()  # Set to evaluation mode
+        return torch.jit.script(self)
+
+
+# %%
+# Create and train the model
+model = LinearRegressionModel()
+model.x_mean = X.mean(dim=0, keepdim=True)
+model.x_std = X.std(dim=0, keepdim=True)
+model.y_mean = y.mean(dim=0, keepdim=True)
+model.y_std = y.std(dim=0, keepdim=True)
+model.to(device)
+X.to(device)
+y.to(device)
+criterion = torch.nn.MSELoss() # Mean Squared Error
+optimizer = torch.optim.SGD(model.parameters(), lr=.05)
+
+# Train the model
+num_epochs = 500
+for epoch in range(num_epochs):
+    model.train()
+    # Forward pass
+    y_predicted = model(X)
+    loss = criterion(y_predicted, (y - model.y_mean) / model.y_std)
+    # Backward and optimize
+    
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+
+    if (epoch) % 100 == 0:
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+# %%
+# Save the model to a temporary file
+model_id = "linear_regression_v1"
+temp_dir = tempfile.mkdtemp()
+temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+
+# Set model to evaluation mode
+model.eval()
+
+# Convert the model to TorchScript
+scripted_model = model.to_torchscript()
+
+# Save model
+scripted_model.save(temp_model_path)
+
+# Send to model server via REST API
+with open(temp_model_path, 'rb') as f:
+    files = {'model': f}
+    response = requests.post(f'http://model-server:5000/models/{model_id}', files=files)
+    
+if response.status_code == 200:
+    print("Model successfully uploaded to model server")
+else:
+    print(f"Error uploading model: {response.text}")
+    
+# Cleanup temp file
+os.remove(temp_model_path)
+os.rmdir(temp_dir)
+
+# %%
+# Get model from model server
+model_id = "linear_regression_v1"
+response = requests.get(f'http://model-server:5000/models/{model_id}')
+
+if response.status_code == 200:
+    # Create temp file to save the downloaded model
+    temp_dir = tempfile.mkdtemp()
+    temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+    
+    # Save the model to the temp file
+    with open(temp_model_path, 'wb') as f:
+        f.write(response.content)
+    
+    # Load the checkpoint with the model
+    loaded_model = torch.jit.load(temp_model_path)
+    
+    # Verify model parameters
+    print(f"Model ID: {model_id}")
+    print(f"X mean: {loaded_model.x_mean}")
+    print(f"X std: {loaded_model.x_std}")
+    print(f"Y mean: {loaded_model.y_mean}")
+    print(f"Y std: {loaded_model.y_std}")
+    
+    # Cleanup
+    os.remove(temp_model_path)
+    os.rmdir(temp_dir)
+    
+    print("Model successfully loaded from model server")
+else:
+    print(f"Error downloading model: {response.text}")
+
+
+
+
+# %%
+# generate some predictions across a range of input vals
+model.eval()
+with torch.no_grad():
+    test_input = np.zeros((10 * 16, 2))
+    for ii in range(10):
+        test_input[ii * 16:ii * 16 + 16, 0] = ii + 6
+        test_input[ii * 16:ii * 16 + 16, 1] = np.arange(50, 210, 10)
+    test_input = torch.tensor(test_input, dtype=torch.float).to(device)
+    
+    # Make prediction with denormalization
+    predicted = model(test_input, denormalize=True)
+    
+    print(f'Predicted values:')
+    print(np.concatenate((test_input.cpu().numpy(), predicted.cpu().numpy()), axis=1))
+
+
+# %%
+# look at the poor hyperplane fit
+from mpl_toolkits.mplot3d import Axes3D
+# %matplotlib inline
+# Get the learned parameters
+learned_weights = model.linear.weight.data.cpu().numpy()
+learned_bias = model.linear.bias.data.cpu().numpy()
+
+# Print the learned hyperplane equation
+print("\nLearned Hyperplane:")
+print(f"y = {learned_weights[0][0]:.2f}*x1 + {learned_weights[0][1]:.2f}*x2 + {learned_bias[0]:.2f}")
+
+# Plot the data and the learned hyperplane
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+# Scatter plot of the data points
+
+ax.scatter(features_scaled[::5,0], features_scaled[::5,1], targets_scaled, c='r', marker='o', label='Data Points', s=2)
+
+# Create a meshgrid for the hyperplane
+x1_range = np.linspace(features_scaled[::5,0].min(), features_scaled[::5,0].max(), 20)
+x2_range = np.linspace(features_scaled[::5,1].min(), features_scaled[::5,1].max(), 20)
+X1, X2 = np.meshgrid(x1_range, x2_range)
+Y_predicted_scaled = learned_weights[0][0] * X1 + learned_weights[0][1] * X2 + learned_bias[0]
+
+# Plot the learned hyperplane
+ax.plot_surface(X1, X2, Y_predicted_scaled, alpha=0.5, label='Learned Hyperplane')
+
+# Set labels and title
+ax.set_xlabel('CQI (scaled)')
+ax.set_ylabel('DRB.UEThpDL (scaled)')
+ax.set_zlabel('min_prb_ratio (scaled)')
+ax.set_title('Hyperplane Fit')
+ax.legend()
+
+# Show the plot
+plt.show()
+# %%
+
