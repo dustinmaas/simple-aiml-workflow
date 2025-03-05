@@ -11,10 +11,6 @@ The project consists of the following components:
 3. **Analysis and Training Environment** - Jupyter notebook environment for data analysis and model training
 4. **Experiment Runner** - Tool for running end-to-end tests of the workflow
 
-The services communicate through REST APIs and share a common library (`lib`) that provides:
-- Custom `TorchStandardScaler` for standardization in PyTorch
-- Common utilities and preprocessing functions
-
 ## Getting Started
 
 ### Prerequisites
@@ -34,7 +30,6 @@ This will:
 1. Build and start the model server on port 5001
 2. Build and start the inference server on port 5002  
 3. Build and start the Jupyter notebook server on port 8888
-4. Run the experiment runner in test mode
 
 ### Running Components Individually
 
@@ -47,42 +42,22 @@ docker-compose up model-server inference-server
 # Start the Jupyter notebook environment
 docker-compose up analysis-and-training
 
-# Run experiment-runner in interactive mode
-docker-compose run experiment-runner python /app/run_experiment.py --mode=interactive
-```
-
-## Project Structure
-
-```
-.
-├── analysis-and-training/     # Jupyter notebooks for analysis and training
-│   ├── notebooks/             # Python notebooks and scripts
-│   └── Dockerfile
-├── model-server/              # Model storage and serving
-│   ├── app.py                 # Flask app for model management
-│   └── Dockerfile
-├── inference-server/          # Inference API service
-│   ├── app.py                 # Flask app for making predictions
-│   └── Dockerfile
-├── experiment-runner/         # Tools for running experiments
-│   ├── run_experiment.py      # Main experiment runner
-│   ├── test_torch_inference.py # End-to-end test script
-│   └── Dockerfile
-├── lib/                       # Shared library code
-│   └── torch_scaler.py        # PyTorch-based StandardScaler
-└── docker-compose.yml         # Docker Compose configuration
 ```
 
 ## Using the Project
 
+### Generating data with the experiment runner
+You can run a test experiment with:
+
+```bash
+cd /var/tmp/simple-aiml-workflow/experiment-runner
+./runner --config=test
+```
+
 ### Training a Model
 
 1. Access the Jupyter notebook at http://localhost:8888
-2. Open `analysis-and-training/notebooks/train_torch_model_notebook.ipynb`
-3. Run the notebook to:
-   - Generate synthetic data or load your own data
-   - Train a PyTorch model using the `TorchStandardScaler`
-   - Save the model to the model server
+2. Open `analysis-and-training/notebooks/playground.py` and use it as a starting point for data analysis and model creation/training/export.
 
 ### Making Predictions
 

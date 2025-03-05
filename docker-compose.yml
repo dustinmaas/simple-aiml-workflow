@@ -6,7 +6,6 @@ services:
       - "5001:5000"
     volumes:
       - ./model-server:/app
-      - ./lib:/app/lib
       - model-data:/data/models
     environment:
       - MODEL_DIRECTORY=/data/models
@@ -20,7 +19,6 @@ services:
       - "5002:5000"
     volumes:
       - ./inference-server:/app
-      - ./lib:/app/lib
     depends_on:
       - model-server
     environment:
@@ -36,7 +34,6 @@ services:
       - "8888:8888"
     volumes:
       - ./analysis-and-training:/app
-      - ./lib:/app/lib
     depends_on:
       - model-server
       - inference-server
@@ -47,24 +44,6 @@ services:
       - ai-ml-network
       - oran-sc-ric_ric_network
     command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
-
-  # Experiment Runner - Runs experiments against the RIC platform
-  experiment-runner:
-    build: ./experiment-runner
-    volumes:
-      - ./experiment-runner:/app
-      - ./lib:/app/lib
-      - ./analysis-and-training:/app/analysis-and-training
-    depends_on:
-      - model-server
-      - inference-server
-    environment:
-      - MODEL_SERVER_URL=http://model-server:5000
-      - INFERENCE_SERVER_URL=http://inference-server:5000
-    networks:
-      - ai-ml-network
-      - oran-sc-ric_ric_network
-    command: python /app/run_experiment.py --mode=test
 
 networks:
   ai-ml-network:

@@ -32,10 +32,9 @@ client = InfluxDBClient(url="http://10.0.2.25:8086", token="ric_admin_token", or
 
 
 experiment_id = "exp_1741030459"
-# Query data
 query = '''
 from(bucket: "network_metrics")
-  |> range(start: -12h)
+  |> range(start: 0, stop: now())
   |> filter(fn: (r) => r.experiment_id == "exp_1741030459")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> keep(columns: ["timestamp", "ue_id", "atten", "min_prb_ratio", "CQI", "RSRP", "DRB.UEThpDl", "DRB.RlcSduTransmittedVolumeDL"])

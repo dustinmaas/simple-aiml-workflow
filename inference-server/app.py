@@ -13,7 +13,8 @@ from flask import Flask, request, jsonify
 import requests
 import torch
 import numpy as np
-
+import inspect
+import tempfile
 # Add the app directory to the Python path so we can import lib
 sys.path.append('/app')
 
@@ -23,23 +24,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Define the model class
-class LinearRegressionModel(torch.nn.Module):
-    def __init__(self):
-        super(LinearRegressionModel, self).__init__()
-        self.linear = torch.nn.Linear(2, 1)  # two input feature, one output feature
-        self.register_buffer('x_mean', torch.zeros(2))
-        self.register_buffer('x_std', torch.ones(2))
-        self.register_buffer('y_mean', torch.zeros(1))
-        self.register_buffer('y_std', torch.ones(1))
-
-    def forward(self, x, denormalize=False):
-        x_scaled = (x - self.x_mean) / self.x_std
-        output = self.linear(x_scaled)
-        if denormalize:
-            output = output * self.y_std + self.y_mean
-        return output
 
 # Constants
 MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://model-server:5000')
@@ -51,46 +35,32 @@ app = Flask(__name__)
 model_cache = {}
 
 def get_model(model_id):
-    """Retrieve a model from the model-server or from cache."""
-    if model_id in model_cache:
-        logger.info(f"Using cached model: {model_id}")
-        return model_cache[model_id]
-    
     try:
-        logger.info(f"Fetching model {model_id} from model server")
-        response = requests.get(f"{MODEL_SERVER_URL}/models/{model_id}")
-        response.raise_for_status()
+        loaded_model = model_cache[model_id]
+    except KeyError:
+        logger.info(f"Model {model_id} not found in cache, fetching from model server")
+        try:
+            response = requests.get(f"{MODEL_SERVER_URL}/models/{model_id}")
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching model {model_id} from model server: {e}")
+            raise Exception(f"Error fetching model {model_id} from model server: {str(e)}")
         
-        # Save the model to a temporary file
-        model_path = f"/tmp/model_{model_id}.pt"
-        with open(model_path, 'wb') as f:
+        # Create temp file to save the downloaded model
+        temp_dir = tempfile.mkdtemp()
+        temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+    
+        # Save the model to the temp file
+        with open(temp_model_path, 'wb') as f:
             f.write(response.content)
+    
+        # Load the checkpoint with the model
+        loaded_model = torch.jit.load(temp_model_path)
         
-        # Load the checkpoint
-        checkpoint = torch.load(model_path)
-        logger.info(f"Loaded checkpoint keys: {list(checkpoint.keys())}")
+        # Save the model to the cache
+        model_cache[model_id] = loaded_model
         
-        # Extract model and normalization parameters
-        if 'model' in checkpoint:
-            # TorchScript model
-            model = checkpoint['model']
-            x_mean = checkpoint.get('x_mean', torch.zeros(2))
-            x_std = checkpoint.get('x_std', torch.ones(2))
-            y_mean = checkpoint.get('y_mean', torch.zeros(1))
-            y_std = checkpoint.get('y_std', torch.ones(1))
-            
-            # Cache the model with normalization parameters
-            model_data = (model, x_mean, x_std, y_mean, y_std)
-            model_cache[model_id] = model_data
-            logger.info(f"Loaded TorchScript model for {model_id}")
-            return model_data
-        else:
-            logger.error(f"Unsupported model format: {list(checkpoint.keys())}")
-            return None
-        
-    except Exception as e:
-        logger.error(f"Error fetching model: {e}")
-        return None
+    return loaded_model
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -120,19 +90,36 @@ def predict():
         return jsonify({"error": f"Failed to load model {model_id}"}), 500
     
     try:
-        model, x_mean, x_std, y_mean, y_std = model_data
-        
         # Convert features to tensor
+        logger.info(f"Features: {features}")
         features_tensor = torch.tensor(features, dtype=torch.float32)
-        
-        # Normalize inputs
-        features_scaled = (features_tensor - x_mean) / x_std
         
         # Make prediction
         with torch.no_grad():
-            predictions_scaled = model(features_scaled)
-            # Denormalize
-            predictions = predictions_scaled * y_std + y_mean
+            logger.info(f"Model data: {model_data}")
+            model, x_mean, x_std, y_mean, y_std = model_data
+            
+            # Normalize features if we have normalization parameters
+            if x_mean is not None and x_std is not None:
+                features_scaled = (features_tensor - x_mean) / x_std
+            else:
+                features_scaled = features_tensor
+            
+            # Make prediction with model
+            try:
+                # First try with denormalize=True
+                predictions = model(features_scaled, denormalize=True)
+            except Exception as e:
+                # If that fails, try without denormalize parameter
+                try:
+                    predictions_scaled = model(features_scaled)
+                    # Manually denormalize if needed
+                    if y_mean is not None and y_std is not None:
+                        predictions = predictions_scaled * y_std + y_mean
+                    else:
+                        predictions = predictions_scaled
+                except Exception as inner_e:
+                    raise Exception(f"Failed to make prediction: {str(e)}. Also tried without denormalize: {str(inner_e)}")
         
         # Convert predictions to list
         predictions = predictions.squeeze().tolist()
