@@ -31,9 +31,9 @@ UE_ID_TO_MATRIX_ID = {1: 1, 3: 2}
 DEFAULT_HOST = "10.0.2.1"
 DEFAULT_PORT = 61611
 DEFAULT_ATTEN_SCRIPT = "/local/repository/bin/update-attens"
-
+ROOT_COMPOSE_PATH = "/var/tmp/simple-aiml-workflow"
 # InfluxDB Configuration
-INFLUXDB_URL = "http://10.0.2.25:8086"
+INFLUXDB_URL = "http://localhost:8086"
 INFLUXDB_TOKEN = "ric_admin_token"
 INFLUXDB_ORG = "ric"
 INFLUXDB_BUCKET = "network_metrics"
@@ -110,9 +110,9 @@ NODE_CONFIG = {
     "gnb": {
         "hostname": "cudu",
         "commands": {
-            "start_gnb": "nohup sudo numactl --membind 1 --cpubind 1 " + SRSRAN_PATH + "/build/apps/gnb/gnb -c /var/tmp/etc/srsran/gnb_rf_x310_ric.yml cell_cfg --channel_bandwidth_MHz 80 > /tmp/gnb-std.log 2>&1 &",
+            "start_gnb": "nohup sudo stdbuf -o0 -e0 numactl --membind 1 --cpubind 1 " + SRSRAN_PATH + "/build/apps/gnb/gnb -c /var/tmp/etc/srsran/gnb_rf_x310_ric.yml cell_cfg --channel_bandwidth_MHz 80 > /tmp/gnb-std.log 2>&1 &",
             "stop_gnb": "sudo pkill -SIGINT gnb",
-            "check_status": "ps -e | grep gnb"
+            "check_status": "grep 'gNB started' /tmp/gnb-std.log" 
         }
     },
     "cn5g": {
@@ -132,14 +132,22 @@ NODE_CONFIG = {
             "start_ric": "cd " + RIC_PATH + " && sudo docker compose up -d",
             "stop_ric": "cd " + RIC_PATH + " && sudo docker compose down",
             "get_docker_logs": "cd " + RIC_PATH + " && sudo docker compose logs > /tmp/final_docker_logs.log",
-            "check_status": "cd " + RIC_PATH + " && sudo docker compose ps"
+            "check_status": "cd " + RIC_PATH + " && sudo docker compose logs --tail=100 | grep 'RMR is ready now'"
+        }
+    },
+    "metrics_influxdb": {
+        "hostname": "ric",
+        "commands": {
+            "start_influxdb": "cd " + ROOT_COMPOSE_PATH + " && sudo docker compose up -d influxdb",
+            "stop_influxdb": "cd " + ROOT_COMPOSE_PATH + " && sudo docker compose down influxdb"
         }
     },
     "aiml_xapp": {
         "hostname": "ric",
         "commands": {
             "start_xapp": "cd " + RIC_PATH + " && sudo docker compose cp /var/tmp/simple-aiml-workflow/aiml_xapp.py python_xapp_runner:/opt/xApps/ && sudo docker compose exec -d python_xapp_runner python3 /opt/xApps/aiml_xapp.py --ue_ids=1,3",
-            "stop_xapp": "cd " + RIC_PATH + " && sudo docker compose exec python_xapp_runner pkill -f aiml_xapp.py"
+            "stop_xapp": "cd " + RIC_PATH + " && sudo docker compose exec python_xapp_runner pkill -f aiml_xapp.py",
+            "check_status": "curl -X GET http://localhost:61611/health"
         }
     }
 }
@@ -195,34 +203,6 @@ class NodeController:
             print(f"Error running {command_name} on {node_name}: {e}")
             return False
             
-    def start_nodes(self):
-        """Start all nodes in correct order: CN -> gNB -> UEs."""
-        print("Starting nodes...")
-        
-        # Start CN first
-        cn_started = self._run_command("cn5g", "start_cn")
-        if not cn_started:
-            return False
-        time.sleep(5)  # Wait for CN to initialize
-        
-        # Start gNB next
-        gnb_started = self._run_command("gnb", "start_gnb")
-        if not gnb_started:
-            self._run_command("cn5g", "stop_cn")  # Cleanup if gNB fails
-            return False
-        time.sleep(5)  # Wait for gNB to initialize
-        
-        # Start UEs last
-        ue1_started = self._run_command("ue1", "start_ue")
-        ue3_started = self._run_command("ue3", "start_ue")
-        if not (ue1_started and ue3_started):
-            # Cleanup if any UE fails
-            self._run_command("gnb", "stop_gnb")
-            self._run_command("cn5g", "stop_cn")
-            return False
-            
-        return True
-        
     def stop_nodes(self):
         """Stop all nodes in reverse order: UEs -> gNB -> CN."""
         self._run_command("ue1", "stop_iperf_client")
@@ -233,7 +213,8 @@ class NodeController:
         self._run_command("cn5g", "stop_iperf_server_1")
         self._run_command("cn5g", "stop_iperf_server_2")
         self._run_command("ric", "stop_ric")
-        
+        self._run_command("metrics_influxdb", "stop_influxdb")
+
     def check_status(self):
         """Check status of all nodes."""
         print("Checking node status...")
@@ -241,9 +222,11 @@ class NodeController:
         self._run_command("gnb", "check_status")
         self._run_command("ue1", "check_status")
         self._run_command("ue3", "check_status")
-        
+        self._run_command("ric", "check_status")
+
     def __del__(self):
-        """Cleanup connections on deletion."""
+        """Clean up connections on object destruction."""
+        print("Cleaning up node connections...")
         for conn in self.connections.values():
             try:
                 conn.close()
@@ -279,13 +262,6 @@ class ExperimentRunner:
         # Initialize node controller
         self.node_controller = NodeController()
         
-        # Initialize InfluxDB client
-        self.influx_client = influxdb_client.InfluxDBClient(
-            url=INFLUXDB_URL,
-            token=INFLUXDB_TOKEN,
-            org=INFLUXDB_ORG
-        )
-        self.write_api = self.influx_client.write_api(write_options=SYNCHRONOUS)
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -310,6 +286,28 @@ class ExperimentRunner:
         
         print("Cleanup complete. Exiting...")
         sys.exit(0)
+
+    def _init_influxdb_client(self):
+        self.influx_client = influxdb_client.InfluxDBClient(
+            url=INFLUXDB_URL,
+            token=INFLUXDB_TOKEN,
+            org=INFLUXDB_ORG
+        )
+        self.write_api = self.influx_client.write_api(write_options=SYNCHRONOUS)
+
+    def _check_influxdb_running(self):
+        """Check if InfluxDB is running."""
+        try:
+            response = requests.get(f"{INFLUXDB_URL}/health", timeout=2)
+            if response.status_code == 200:
+                print("InfluxDB is already running.")
+                return True
+            else:
+                print("InfluxDB is not running.")
+                return False
+        except Exception as e:
+            print(f"Error checking InfluxDB status: {e}")
+            return False
 
     def _update_atten(self, atten, ue=1):
         """Update attenuation for a UE. UE ids are
@@ -420,7 +418,7 @@ class ExperimentRunner:
         except Exception as e:
             print(f"Error storing data in InfluxDB: {e}")
     
-    def setup_experiment(self):
+    def _setup_experiment(self):
         """Set up experiment by starting all components in the correct order."""
         print("Setting up experiment...")
 
@@ -435,7 +433,8 @@ class ExperimentRunner:
         self.node_controller._run_command("aiml_xapp", "stop_xapp")
         self.node_controller._run_command("gnb", "stop_gnb")
         self.node_controller._run_command("ric", "stop_ric")
-        
+        self.node_controller._run_command("metrics_influxdb", "stop_influxdb")
+
         # Start core network and iperf servers
         print("Starting core network and iperf servers...")
         self.node_controller._run_command("cn5g", "restart_cn")
@@ -452,45 +451,47 @@ class ExperimentRunner:
         # import ipdb; ipdb.set_trace()
         print("Starting RIC...")
         self.node_controller._run_command("ric", "start_ric")
-        time.sleep(8)
+        while not self.node_controller._run_command("ric", "check_status"):
+            time.sleep(1)
         
         # Start gNB
         print("Starting gNB...")
         self.node_controller._run_command("gnb", "start_gnb")
-        time.sleep(8)
+        while not self.node_controller._run_command("gnb", "check_status"):
+            time.sleep(1)
         
         # Start UE1 and wait for connection
         print("Starting UE1...")
         self.node_controller._run_command("ue1", "online_mode")
-        while True:
-            if self.node_controller._run_command("ue1", "check_status"):
-                print("UE1 connected")
-                break
-            time.sleep(0.5)
+        while not self.node_controller._run_command("ue1", "check_status"):
+            time.sleep(1)
             
         # Start UE3 and wait for connection
         print("Starting UE3...")
         self.node_controller._run_command("ue3", "online_mode")
-        while True:
-            if self.node_controller._run_command("ue3", "check_status"):
-                print("UE3 connected")
-                break
-            time.sleep(0.5)
-            
+        while not self.node_controller._run_command("ue3", "check_status"):
+            time.sleep(1)
+
         # Start iperf clients
         print("Starting iperf clients...")
         self.node_controller._run_command("ue1", "start_iperf_client")
         self.node_controller._run_command("ue3", "start_iperf_client")
         
+        # Start InfluxDB
+        print("Starting InfluxDB...")
+        self.node_controller._run_command("metrics_influxdb", "start_influxdb")
+        self._check_influxdb_running()
+        while not self._check_influxdb_running():
+            time.sleep(1)
+        self._init_influxdb_client()
+        
         # Start AIML xApp and wait for API
         # import ipdb; ipdb.set_trace()
         print("Starting AIML xApp...")
         self.node_controller._run_command("aiml_xapp", "start_xapp")
+        while not self.node_controller._run_command("aiml_xapp", "check_status"):
+            time.sleep(1)
         
-        # Check if xApp API becomes available
-        if not self._check_xapp_api():
-            print("Failed to connect to xApp API after maximum retries")
-            raise RuntimeError("xApp API not available")
         
         # Initialize PRB ratios
         self.prb_ratios = {1: {"min_prb_ratio": 50, "max_prb_ratio": 100}, 3: {"min_prb_ratio": 0, "max_prb_ratio": 100}}
@@ -503,7 +504,7 @@ class ExperimentRunner:
         print("Starting experiment...")
         
         # Set up experiment components
-        self.setup_experiment()
+        self._setup_experiment()
             
         try:
             with open(self.data_file, "w") as f:

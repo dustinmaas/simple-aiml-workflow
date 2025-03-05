@@ -27,7 +27,7 @@ import plotly.express as px
 from influxdb_client import InfluxDBClient
 
 # Connect to InfluxDB
-client = InfluxDBClient(url="http://10.0.2.25:8086", token="ric_admin_token", org="ric")
+client = InfluxDBClient(url="http://metrics_influxdb:8086", token="ric_admin_token", org="ric")
 
 
 

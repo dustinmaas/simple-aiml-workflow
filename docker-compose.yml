@@ -1,4 +1,24 @@
 services:
+  # InfluxDB - Time series database for network metrics
+  influxdb:
+    container_name: metrics_influxdb
+    hostname: metrics_influxdb
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=ric_admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=ric_password
+      - DOCKER_INFLUXDB_INIT_ORG=ric
+      - DOCKER_INFLUXDB_INIT_BUCKET=network_metrics
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=ric_admin_token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - ai-ml-network
+      - oran-sc-ric_ric_network
+
   # Model Server - Stores and serves PyTorch models
   model-server:
     build: ./model-server
@@ -53,3 +73,4 @@ networks:
 
 volumes:
   model-data:
+  influxdb-data:
