@@ -1,5 +1,5 @@
 diff --git a/.env b/.env
-index 75fcad8..b7603c1 100644
+index 75fcad8..e7ecc3e 100644
 --- a/.env
 +++ b/.env
 @@ -53,3 +53,7 @@ RTMGR_SIM_PORT=12020
@@ -8,11 +8,11 @@ index 75fcad8..b7603c1 100644
  XAPP_PY_RUNNER_IP=10.0.2.20
 +
 +# InfluxDB Time Series Database
-+INFLUXDB_IP=10.0.2.25
++INFLUXDB_IP=metrics_influxdb
 +INFLUXDB_PORT=8086
 \ No newline at end of file
 diff --git a/docker-compose.yml b/docker-compose.yml
-index 59f7732..811eff6 100644
+index 59f7732..ee3ec79 100644
 --- a/docker-compose.yml
 +++ b/docker-compose.yml
 @@ -1,5 +1,3 @@
@@ -21,33 +21,7 @@ index 59f7732..811eff6 100644
  services:
    dbaas:
      container_name: ric_dbaas
-@@ -10,6 +8,25 @@ services:
-       ric_network:
-         ipv4_address: ${DBAAS_IP:-10.0.2.12}
- 
-+  influxdb:
-+    container_name: ric_influxdb
-+    hostname: influxdb
-+    image: influxdb:2.7
-+    ports:
-+      - "8086:8086"
-+    environment:
-+      - DOCKER_INFLUXDB_INIT_MODE=setup
-+      - DOCKER_INFLUXDB_INIT_USERNAME=ric_admin
-+      - DOCKER_INFLUXDB_INIT_PASSWORD=ric_password
-+      - DOCKER_INFLUXDB_INIT_ORG=ric
-+      - DOCKER_INFLUXDB_INIT_BUCKET=network_metrics
-+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=ric_admin_token
-+    volumes:
-+      - influxdb-data:/var/lib/influxdb2
-+    networks:
-+      ric_network:
-+        ipv4_address: ${INFLUXDB_IP:-10.0.2.25}
-+
-   rtmgr_sim:
-     container_name: ric_rtmgr_sim
-     hostname: rtmgr_sim
-@@ -73,8 +90,8 @@ services:
+@@ -73,8 +71,8 @@ services:
      hostname: e2term
      image: nexus3.o-ran-sc.org:10002/o-ran-sc/ric-plt-e2:${E2TERM_VER}
      #Uncomment ports to use the RIC from outside the docker network.
@@ -58,13 +32,10 @@ index 59f7732..811eff6 100644
      env_file:
        - .env
      environment:
-@@ -171,14 +188,23 @@ services:
+@@ -171,10 +169,13 @@ services:
        - type: bind
          source: ./xApps/python
          target: /opt/xApps
-+      - type: bind
-+        source: /opt/data
-+        target: /opt/data
 +
        # Uncomment if you want to use your local ric-plt-xapp-frame-py copy inside the container
        #- type: bind
@@ -75,13 +46,6 @@ index 59f7732..811eff6 100644
      networks:
        ric_network:
          ipv4_address: ${XAPP_PY_RUNNER_IP:-10.0.2.20}
- 
-+volumes:
-+  influxdb-data:
-+
- networks:
-   ric_network:
-     ipam:
 diff --git a/ric/images/ric-plt-xapp-frame-py/Dockerfile b/ric/images/ric-plt-xapp-frame-py/Dockerfile
 index 5ddd4de..0c3c10d 100644
 --- a/ric/images/ric-plt-xapp-frame-py/Dockerfile
