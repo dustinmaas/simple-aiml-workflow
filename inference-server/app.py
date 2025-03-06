@@ -15,8 +15,6 @@ import torch
 import numpy as np
 import inspect
 import tempfile
-# Add the app directory to the Python path so we can import lib
-sys.path.append('/app')
 
 # Configure logging
 logging.basicConfig(

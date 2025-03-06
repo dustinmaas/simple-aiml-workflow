@@ -60,6 +60,8 @@ services:
     environment:
       - MODEL_SERVER_URL=http://model-server:5000
       - INFERENCE_SERVER_URL=http://inference-server:5000
+    env_file:
+      - .env
     networks:
       - ai-ml-network
       - oran-sc-ric_ric_network
