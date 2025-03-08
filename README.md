@@ -82,7 +82,3 @@ Or modify the Docker Compose configuration to run in test mode automatically:
 ```yaml
 command: python /app/run_experiment.py --mode=test
 ```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
