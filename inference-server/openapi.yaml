@@ -1,0 +1,114 @@
+openapi: 3.0.3
+info:
+  title: Inference Server API
+  description: API for making predictions with PyTorch models
+  version: 1.0.0
+servers:
+  - url: http://localhost:5002
+    description: Local development
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the service
+      operationId: healthCheck
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+  /predict:
+    post:
+      summary: Make predictions
+      description: Make predictions using loaded models
+      operationId: predict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - features
+              properties:
+                features:
+                  type: array
+                  items:
+                    type: number
+                  description: Input features for model prediction
+                model_id:
+                  type: string
+                  description: ID of the model to use (defaults to 'latest')
+      responses:
+        '200':
+          description: Prediction results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  predictions:
+                    type: array
+                    items:
+                      type: number
+                    description: Model prediction results
+                  model_id:
+                    type: string
+                    description: ID of the model used for prediction
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /models:
+    get:
+      summary: List available models
+      description: Returns a list of all available models from the model server
+      operationId: listModels
+      responses:
+        '200':
+          description: List of models
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      example: model1
+                    file:
+                      type: string
+                      example: model1.pt
+                    path:
+                      type: string
+                      example: /app/models/model1.pt
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string

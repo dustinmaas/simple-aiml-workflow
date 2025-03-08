@@ -1,0 +1,74 @@
+# Node Configuration
+# Constants used in commands
+constants:
+  SRSRAN_PATH: /var/tmp/srsRAN_Project
+  CORE_NETWORK_IP: 10.45.0.1
+  RIC_PATH: /var/tmp/simple-aiml-workflow/oran-sc-ric
+  ROOT_COMPOSE_PATH: /var/tmp/simple-aiml-workflow
+
+# Node specific configurations
+nodes:
+  ue1:
+    hostname: nuc27
+    commands:
+      restart_con_manager: sudo systemctl restart quectel-cm
+      airplane_mode: >-
+        sudo sh -c "chat -t 1 -sv '' AT OK 'AT+CFUN=4' OK < /dev/ttyUSB2 > /dev/ttyUSB2"
+      online_mode: >-
+        sudo sh -c "chat -t 1 -sv '' AT OK 'AT+CFUN=1' OK < /dev/ttyUSB2 > /dev/ttyUSB2"
+      start_iperf_client: >-
+        nohup iperf3 -c {CORE_NETWORK_IP} -p 5201 -t10000 -u -b300M -R > /tmp/iperf3_ue1.log 2>&1 &
+      stop_iperf_client: sudo pkill -SIGINT -f iperf3
+      check_status: ping -c 1 -W 1 -w 1 {CORE_NETWORK_IP}
+
+  ue3:
+    hostname: nuc22
+    commands:
+      restart_con_manager: sudo systemctl restart quectel-cm
+      airplane_mode: >-
+        sudo sh -c "chat -t 1 -sv '' AT OK 'AT+CFUN=4' OK < /dev/ttyUSB2 > /dev/ttyUSB2"
+      online_mode: >-
+        sudo sh -c "chat -t 1 -sv '' AT OK 'AT+CFUN=1' OK < /dev/ttyUSB2 > /dev/ttyUSB2"
+      start_iperf_client: >-
+        nohup iperf3 -c {CORE_NETWORK_IP} -p 5202 -t10000 -u -b300M -R > /tmp/iperf3_ue3.log 2>&1 &
+      stop_iperf_client: sudo pkill -SIGINT -f iperf3
+      check_status: ping -c 1 -W 1 -w 1 {CORE_NETWORK_IP}
+
+  gnb:
+    hostname: cudu
+    commands:
+      start_gnb: >-
+        nohup sudo stdbuf -o0 -e0 numactl --membind 1 --cpubind 1 {SRSRAN_PATH}/build/apps/gnb/gnb -c /var/tmp/etc/srsran/gnb_rf_x310_ric.yml cell_cfg --channel_bandwidth_MHz 80 > /tmp/gnb-std.log 2>&1 &
+      stop_gnb: sudo pkill -SIGINT gnb
+      check_status: grep 'gNB started' /tmp/gnb-std.log
+
+  cn5g:
+    hostname: cn5g
+    commands:
+      restart_cn: sudo systemctl restart open5gs-*
+      start_iperf_server_1: nohup iperf3 -s -p 5201 > /tmp/iperf3_server1.log 2>&1 &
+      start_iperf_server_2: nohup iperf3 -s -p 5202 > /tmp/iperf3_server2.log 2>&1 &
+      stop_iperf_server_1: pkill -SIGINT -f 'iperf3 -s -p 5201'
+      stop_iperf_server_2: pkill -SIGINT -f 'iperf3 -s -p 5202'
+      check_status: sudo systemctl status open5gs-*
+
+  ric:
+    hostname: ric
+    commands:
+      start_ric: cd {RIC_PATH} && sudo docker compose up -d
+      stop_ric: cd {RIC_PATH} && sudo docker compose down
+      get_docker_logs: cd {RIC_PATH} && sudo docker compose logs > /tmp/final_docker_logs.log
+      check_status: cd {RIC_PATH} && sudo docker compose logs --tail=100 | grep 'RMR is ready now'
+
+  metrics_influxdb:
+    hostname: ric
+    commands:
+      start_influxdb: cd {ROOT_COMPOSE_PATH} && sudo docker compose up -d influxdb
+      stop_influxdb: cd {ROOT_COMPOSE_PATH} && sudo docker compose down influxdb
+
+  aiml_xapp:
+    hostname: ric
+    commands:
+      start_xapp: >-
+        cd {RIC_PATH} && sudo docker compose cp /var/tmp/simple-aiml-workflow/aiml_xapp.py python_xapp_runner:/opt/xApps/ && sudo docker compose exec -d python_xapp_runner python3 /opt/xApps/aiml_xapp.py --ue_ids="1,3"
+      check_status: curl -s -X GET http://localhost:61611/health

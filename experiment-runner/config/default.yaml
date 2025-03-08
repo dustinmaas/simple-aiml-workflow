@@ -1,0 +1,20 @@
+description: >
+  This experiment tests the performance of the system under 
+  different attenuation values and PRB ratios for UE 1 slice.
+
+prb_configs:
+  ue_id: 1
+  sst: 1
+  sd: 1
+  min_prb_ratio_range:
+    start: 50
+    end: 96
+    step: 1
+  max_prb_ratio: 100
+
+attens_range:
+  start: 10
+  end: 37
+  step: 1
+
+dwell_time_s: 5

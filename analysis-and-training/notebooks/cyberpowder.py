@@ -435,6 +435,7 @@ fig.update_layout(
 fig.show()
 # %%
 # Save the model to a temporary file
+#TODO: save to huggingface
 model_id = "linear_regression_v1"
 temp_dir = tempfile.mkdtemp()
 temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
@@ -449,11 +450,11 @@ scripted_model = model.to_torchscript()
 scripted_model.save(temp_model_path)
 
 # upload to huggingface
-model_name = "linear_regression_v1"
-model_repo = f"cyberpowder/{model_name}"
+model_repo = f"cyberpowder/{model_id}"
 hf_api.upload_file(
+    path_or_fileobj=temp_model_path,
     repo_id=model_repo,
-    path=temp_model_path,
+    path_in_repo=f"{model_id}.pt",
     token=HF_TOKEN
 )
 

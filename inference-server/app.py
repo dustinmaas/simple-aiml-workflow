@@ -145,67 +145,6 @@ def list_models():
         logger.error(f"Error getting model list from model server: {e}")
         return jsonify({"error": f"Error communicating with model server: {str(e)}"}), 500
 
-@app.route('/predict/prb', methods=['POST'])
-def predict_prb():
-    """Specialized endpoint for PRB prediction based on CQI and throughput"""
-    # Parse request data
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
-    
-    data = request.get_json()
-    
-    # Validate request data
-    if 'cqi' not in data:
-        return jsonify({"error": "Missing 'cqi' in request data"}), 400
-    
-    if 'throughput' not in data:
-        return jsonify({"error": "Missing 'throughput' in request data"}), 400
-    
-    # Get model_id or use default
-    model_id = data.get('model_id', 'torch_linear_regression_v1')
-    
-    # Prepare features
-    cqi = data['cqi']
-    throughput = data['throughput']
-    
-    # Handle both single value and list inputs
-    if isinstance(cqi, (int, float)) and isinstance(throughput, (int, float)):
-        features = [[float(cqi), float(throughput)]]
-    elif isinstance(cqi, list) and isinstance(throughput, list) and len(cqi) == len(throughput):
-        features = [[float(c), float(t)] for c, t in zip(cqi, throughput)]
-    else:
-        return jsonify({"error": "CQI and throughput must be either single values or lists of the same length"}), 400
-    
-    # Forward the prediction request to the model server
-    try:
-        response = requests.post(
-            f"{MODEL_SERVER_URL}/models/{model_id}/predict",
-            json={"features": features},
-            timeout=30
-        )
-        
-        if response.status_code != 200:
-            return jsonify(response.json()), response.status_code
-        
-        # Extract predictions and format response
-        result = response.json()
-        predictions = result.get('predictions', [])
-        
-        # Format response based on input type
-        if len(features) == 1:
-            return jsonify({
-                "min_prb_ratio": predictions[0],
-                "model_id": model_id
-            }), 200
-        else:
-            return jsonify({
-                "min_prb_ratio": predictions,
-                "model_id": model_id
-            }), 200
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error forwarding request to model server: {e}")
-        return jsonify({"error": f"Error communicating with model server: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True) 
