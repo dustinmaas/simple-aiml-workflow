@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AIML Workflow API Documentation</title>
+  <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+    .header {
+      background-color: #1b1b1b;
+      color: white;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .api-selector {
+      margin: 0 10px;
+    }
+    .api-selector select {
+      padding: 5px 10px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+    .swagger-ui .topbar {
+      display: none;
+    }
+    .container {
+      height: calc(100vh - 60px);
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>AIML Workflow API Documentation</h1>
+    <div class="api-selector">
+      <select id="api-selector" onchange="loadSwagger(this.value)">
+        <option value="model-server">Model Server API</option>
+        <option value="inference-server">Inference Server API</option>
+      </select>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div id="swagger-ui"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    function loadSwagger(server) {
+      const ui = SwaggerUIBundle({
+        url: server === 'model-server' ? 'model-server/openapi.yaml' : 'inference-server/openapi.yaml',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset
+        ],
+        layout: "BaseLayout",
+        docExpansion: 'list',
+        defaultModelsExpandDepth: 1,
+        defaultModelExpandDepth: 1,
+        validatorUrl: null
+      });
+      window.ui = ui;
+    }
+    
+    // Load default API on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      loadSwagger('model-server');
+    });
+  </script>
+</body>
+</html>

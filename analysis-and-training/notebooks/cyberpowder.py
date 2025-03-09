@@ -23,8 +23,8 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 import datasets
 import huggingface_hub as hf
-# import onnx
-# import onnxruntime
+import onnx
+import onnxruntime as ort
 
 # Get Hugging Face token from environment variable
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -274,49 +274,28 @@ class LinearRegressionModel(torch.nn.Module):
     def __init__(self):
         super(LinearRegressionModel, self).__init__()
         self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
-        self.register_buffer('x_mean', torch.zeros(2))
-        self.register_buffer('x_std', torch.ones(2))
+        
+        # Apply batch normalization to input features
+        self.batch_norm = torch.nn.BatchNorm1d(2)
+        
+        # Register buffers to store the mean and standard deviation of the output features
         self.register_buffer('y_mean', torch.zeros(1))
         self.register_buffer('y_std', torch.ones(1))
 
-    def forward(self, x: torch.Tensor, denormalize: bool = False) -> torch.Tensor:
-        x_scaled = (x - self.x_mean) / self.x_std
-        output = self.linear(x_scaled)
-        if denormalize:  # Explicit comparison for TorchScript compatibility
-            output = output * self.y_std + self.y_mean
-        return output
-    
-    # Add methods to make TorchScript serializable
-    def __getstate__(self):
-        return {
-            'linear.weight': self.linear.weight,
-            'linear.bias': self.linear.bias,
-            'x_mean': self.x_mean,
-            'x_std': self.x_std,
-            'y_mean': self.y_mean,
-            'y_std': self.y_std
-        }
-    
-    def __setstate__(self, state):
-        self.__init__()
-        self.linear.weight.data.copy_(state['linear.weight'])
-        self.linear.bias.data.copy_(state['linear.bias'])
-        self.x_mean.copy_(state['x_mean'])
-        self.x_std.copy_(state['x_std'])
-        self.y_mean.copy_(state['y_mean'])
-        self.y_std.copy_(state['y_std'])
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_normalized = self.batch_norm(x)
+        output = self.linear(x_normalized)
         
-    # Add a scripting method to convert the model to TorchScript
-    def to_torchscript(self):
-        self.eval()  # Set to evaluation mode
-        return torch.jit.script(self)
+        if not self.training:
+            with torch.no_grad():
+                output = output * self.y_std + self.y_mean
+                
+        return output
 
 
 # %%
 # Create and train the model
 model = LinearRegressionModel()
-model.x_mean = X.mean(dim=0, keepdim=True)
-model.x_std = X.std(dim=0, keepdim=True)
 model.y_mean = y.mean(dim=0, keepdim=True)
 model.y_std = y.std(dim=0, keepdim=True)
 model.to(device)
@@ -326,7 +305,7 @@ criterion = torch.nn.MSELoss() # Mean Squared Error
 optimizer = torch.optim.SGD(model.parameters(), lr=.05)
 
 # Train the model
-num_epochs = 500
+num_epochs = 150
 for epoch in range(num_epochs):
     model.train()
     # Forward pass
@@ -338,7 +317,7 @@ for epoch in range(num_epochs):
     optimizer.step()
     optimizer.zero_grad()
 
-    if (epoch) % 100 == 0:
+    if (epoch) % 10 == 0:
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
 # %%
@@ -352,8 +331,12 @@ learned_bias = model.linear.bias.data.cpu().numpy()
 print("\nLearned Hyperplane (in scaled space):")
 print(f"y_scaled = {learned_weights[0][0]:.2f}*x1_scaled + {learned_weights[0][1]:.2f}*x2_scaled + {learned_bias[0]:.2f}")
 
+# Get feature normalization parameters from the batch normalization layer
+x_mean = model.batch_norm.running_mean.cpu().numpy().reshape(1, -1)
+x_std = torch.sqrt(model.batch_norm.running_var).cpu().numpy().reshape(1, -1)
+
 # Create scaled versions of features and targets using the model's normalization parameters
-features_scaled = (X.cpu().numpy() - model.x_mean.cpu().numpy()) / model.x_std.cpu().numpy()
+features_scaled = (X.cpu().numpy() - x_mean) / x_std
 targets_scaled = (y.cpu().numpy() - model.y_mean.cpu().numpy()) / model.y_std.cpu().numpy()
 
 # Get original unscaled data
@@ -370,9 +353,9 @@ x1_range = np.linspace(features_unscaled[:,0].min(), features_unscaled[:,0].max(
 x2_range = np.linspace(features_unscaled[:,1].min(), features_unscaled[:,1].max(), 20)
 X1, X2 = np.meshgrid(x1_range, x2_range)
 
-# Convert meshgrid to scaled space for prediction
-X1_scaled = (X1 - model.x_mean.cpu().numpy()[0, 0]) / model.x_std.cpu().numpy()[0, 0]
-X2_scaled = (X2 - model.x_mean.cpu().numpy()[0, 1]) / model.x_std.cpu().numpy()[0, 1]
+# Convert meshgrid to scaled space for prediction using the batch normalization parameters
+X1_scaled = (X1 - x_mean[0, 0]) / x_std[0, 0]
+X2_scaled = (X2 - x_mean[0, 1]) / x_std[0, 1]
 
 # Calculate predictions in scaled space
 Y_predicted_scaled = learned_weights[0][0] * X1_scaled + learned_weights[0][1] * X2_scaled + learned_bias[0]
@@ -435,44 +418,193 @@ fig.update_layout(
 fig.show()
 # %%
 # Save the model to a temporary file
-#TODO: save to huggingface
-model_id = "linear_regression_v1"
+import datetime
+import json
+
+model_name = "linear_regression_model"
+model_version = "1.0.1"  # Follow semantic versioning: major.minor.patch
+
+# Calculate loss as a metric
+with torch.no_grad():
+    y_pred = model(X)
+    loss = criterion(y_pred, (y - model.y_mean) / model.y_std).item()
+
+# Metadata to include with the model
+metadata_props = {
+    "version": model_version,
+    "training_date": datetime.datetime.now().isoformat(),
+    "framework": f"PyTorch {torch.__version__}",
+    "dataset": "network_metrics_exp_1741030459",
+    "metrics": json.dumps({"mse": loss}),
+    "description": "Linear regression model for PRB prediction based on CQI and throughput",
+    "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
+    "output_features": json.dumps(["min_prb_ratio"])
+}
+
+# PyTorch needs to trace the operations inside the model to generate the computational graph
+dummy_input = torch.randn(1, 2)  # Example dummy input for export
+
+# Use a temp file for export before uploading to model server
 temp_dir = tempfile.mkdtemp()
-temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+temp_model_path = os.path.join(temp_dir, f"{model_name}_v{model_version}.onnx")
 
-# Set model to evaluation mode
-model.eval()
+# Export the model to ONNX without any embedded metadata
+torch.onnx.export(
+    model, 
+    dummy_input, 
+    temp_model_path, 
+    verbose=True, 
+    input_names=["input"], 
+    output_names=["output"], 
+    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
+)
 
-# Convert the model to TorchScript
-scripted_model = model.to_torchscript()
+# Send the model and metadata to Hugging Face
+model_repo = f"cyberpowder/{model_name}_v{model_version}"
 
-# Save model
-scripted_model.save(temp_model_path)
+# Create metadata JSON file
+metadata_path = os.path.join(temp_dir, f"{model_name}_v{model_version}_metadata.json")
+with open(metadata_path, 'w') as f:
+    json.dump(metadata_props, f, indent=2)
 
-# upload to huggingface
-model_repo = f"cyberpowder/{model_id}"
+# Create or ensure repository exists
+try:
+    hf_api.create_repo(model_repo, private=True, token=HF_TOKEN)
+    print(f"Created new repository: {model_repo}")
+except Exception as e:
+    print(f"Repository may already exist or error creating it: {e}")
+
+# Upload ONNX model to Hugging Face
+print(f"Uploading ONNX model to Hugging Face: {model_repo}")
 hf_api.upload_file(
     path_or_fileobj=temp_model_path,
     repo_id=model_repo,
-    path_in_repo=f"{model_id}.pt",
+    path_in_repo=f"{model_name}_v{model_version}.onnx",
     token=HF_TOKEN
 )
 
-# # Send to model server via REST API
-# with open(temp_model_path, 'rb') as f:
-#     files = {'model': f}
-#     response = requests.post(f'http://model-server:5000/models/{model_id}', files=files)
-    
-# if response.status_code == 200:
-#     print("Model successfully uploaded to model server")
-# else:
-#     print(f"Error uploading model: {response.text}")
-    
-# # Cleanup temp file
-# os.remove(temp_model_path)
-# os.rmdir(temp_dir)
+# Upload metadata to Hugging Face
+print(f"Uploading metadata to Hugging Face: {model_repo}")
+hf_api.upload_file(
+    path_or_fileobj=metadata_path,
+    repo_id=model_repo,
+    path_in_repo=f"{model_name}_v{model_version}_metadata.json",
+    token=HF_TOKEN
+)
 
+print(f"Model and metadata successfully uploaded to Hugging Face: {model_repo}")
 
 
 # %%
+# Download and use the model from Hugging Face
+from huggingface_hub import hf_hub_download
 
+model_repo = f"cyberpowder/{model_name}_v{model_version}"
+model_filename = f"{model_name}_v{model_version}.onnx"
+metadata_filename = f"{model_name}_v{model_version}_metadata.json"
+
+# List files in the repo to confirm upload was successful
+print(f"Files in repository {model_repo}:")
+model_files = hf_api.list_repo_files(model_repo, token=HF_TOKEN)
+for file in model_files:
+    print(f"  - {file}")
+
+# Create temporary directory for downloaded files
+download_dir = tempfile.mkdtemp()
+
+try:
+    # Download model from Hugging Face
+    print(f"\nDownloading model from Hugging Face...")
+    model_path = hf_hub_download(
+        repo_id=model_repo,
+        filename=model_filename,
+        token=HF_TOKEN,
+        local_dir=download_dir
+    )
+    
+    # Download metadata
+    print(f"Downloading metadata from Hugging Face...")
+    metadata_path = hf_hub_download(
+        repo_id=model_repo,
+        filename=metadata_filename,
+        token=HF_TOKEN,
+        local_dir=download_dir
+    )
+    
+    # Load metadata
+    with open(metadata_path, 'r') as f:
+        metadata = json.load(f)
+    
+    print(f"\nModel metadata:")
+    print(f"  Version: {metadata.get('version')}")
+    print(f"  Training date: {metadata.get('training_date')}")
+    print(f"  Description: {metadata.get('description')}")
+    print(f"  Framework: {metadata.get('framework')}")
+    print(f"  Metrics: {metadata.get('metrics')}")
+    
+    # Load model with ONNX Runtime
+    print(f"\nLoading model for inference...")
+    session = ort.InferenceSession(model_path)
+    
+    # Sample data for inference
+    sample_inputs = [
+        [5.0, 20.0],   # Low CQI, low throughput
+        [10.0, 50.0],  # Medium CQI, medium throughput
+        [15.0, 100.0], # High CQI, high throughput
+        [8.0, 80.0],   # Medium-low CQI, medium-high throughput
+        [12.0, 30.0]   # Medium-high CQI, medium-low throughput
+    ]
+    
+    input_tensor = np.array(sample_inputs, dtype=np.float32)
+    
+    # Run inference
+    print(f"\nRunning inference with sample data...")
+    outputs = session.run(None, {"input": input_tensor})
+    
+    # Print results as a table
+    print("\nPrediction Results:")
+    print("------------------------------------------------------")
+    print("   CQI   | Throughput (Mbps) | Predicted min_prb_ratio")
+    print("------------------------------------------------------")
+    for i, sample in enumerate(sample_inputs):
+        print(f"  {sample[0]:5.1f}  |      {sample[1]:7.1f}     |        {outputs[0][i][0]:7.2f}")
+    print("------------------------------------------------------")
+    
+    # Create a visualization
+    fig = go.Figure()
+    
+    # Add points for the samples
+    fig.add_trace(go.Scatter3d(
+        x=[sample[0] for sample in sample_inputs],  # CQI
+        y=[sample[1] for sample in sample_inputs],  # Throughput
+        z=[pred[0] for pred in outputs[0]],        # Predicted min_prb_ratio
+        mode='markers',
+        marker=dict(
+            size=8,
+            color='red',
+        ),
+        name='Predictions',
+        hovertemplate='CQI: %{x:.1f}<br>Throughput: %{y:.1f} Mbps<br>Predicted PRB: %{z:.1f}%<extra></extra>'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title=f"Predictions from Hugging Face Model ({model_name} v{model_version})",
+        scene=dict(
+            xaxis_title='CQI',
+            yaxis_title='Throughput (Mbps)',
+            zaxis_title='min_prb_ratio (%)',
+        ),
+        width=800,
+        height=600
+    )
+    
+    fig.show()
+    
+except Exception as e:
+    print(f"Error using model from Hugging Face: {e}")
+    
+finally:
+    # Clean up
+    import shutil
+    shutil.rmtree(download_dir, ignore_errors=True)
