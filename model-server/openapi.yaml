@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
   title: Model Server API
-  description: API for managing and retrieving PyTorch models
-  version: 1.0.0
+  description: API for managing and retrieving versioned ONNX models with metadata
+  version: 0.1.0
 servers:
-  - url: http://localhost:5001
+  - url: http://localhost:5000
     description: Local development
 paths:
   /health:
@@ -22,11 +22,11 @@ paths:
                 properties:
                   status:
                     type: string
-                    example: ok
+                    example: healthy
   /models:
     get:
       summary: List available models
-      description: Returns a list of all available models
+      description: Returns a list of all available models with their versions
       operationId: listModels
       responses:
         '200':
@@ -34,40 +34,84 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                      example: model1
-                    file:
-                      type: string
-                      example: model1.pt
-                    path:
-                      type: string
-                      example: /app/models/model1.pt
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ModelVersion'
+                example:
+                  linear_regression_model:
+                    - filename: linear_regression_model_v1.0.0.onnx
+                      path: /app/models/linear_regression_model_v1.0.0.onnx
+                      version: 1.0.0
+                    - filename: linear_regression_model_v1.0.1.onnx
+                      path: /app/models/linear_regression_model_v1.0.1.onnx
+                      version: 1.0.1
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-  /models/{model_id}:
+                $ref: '#/components/schemas/Error'
+  
+  /models/{model_name}/versions:
     get:
-      summary: Get model file
-      description: Retrieves a specific model file
-      operationId: getModel
+      summary: List model versions
+      description: Returns a list of all available versions for a specific model
+      operationId: listModelVersions
       parameters:
-        - name: model_id
+        - name: model_name
           in: path
           required: true
           schema:
             type: string
-          description: ID of the model to retrieve
+          description: Name of the model
+      responses:
+        '200':
+          description: List of model versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model:
+                    type: string
+                    example: linear_regression_model
+                  versions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModelVersion'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /models/{model_name}/versions/{version}:
+    get:
+      summary: Get specific model version
+      description: Retrieves a specific version of a model
+      operationId: getModelVersion
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0 or latest)
       responses:
         '200':
           description: Model file
@@ -77,25 +121,34 @@ paths:
                 type: string
                 format: binary
         '404':
-          description: Model not found
+          description: Model version not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
-      summary: Upload model
-      description: Upload and store a model file
-      operationId: uploadModel
+      summary: Upload model version
+      description: Upload and store a specific version of a model with metadata
+      operationId: uploadModelVersion
       parameters:
-        - name: model_id
+        - name: model_name
           in: path
           required: true
           schema:
             type: string
-          description: ID to assign to the uploaded model
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0)
       requestBody:
         required: true
         content:
@@ -106,7 +159,11 @@ paths:
                 model:
                   type: string
                   format: binary
-                  description: PyTorch model file (.pt)
+                  description: ONNX model file (.onnx)
+                metadata:
+                  type: string
+                  format: json
+                  description: JSON metadata for the model
       responses:
         '200':
           description: Model uploaded successfully
@@ -117,31 +174,50 @@ paths:
                 properties:
                   success:
                     type: boolean
+                    example: true
                   message:
                     type: string
+                    example: Model linear_regression_model version 1.0.0 uploaded successfully
+                  model:
+                    $ref: '#/components/schemas/ModelInfo'
         '400':
           description: Invalid request
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Version already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     delete:
-      summary: Delete model
-      description: Delete a specific model
-      operationId: deleteModel
+      summary: Delete model version
+      description: Delete a specific version of a model
+      operationId: deleteModelVersion
       parameters:
-        - name: model_id
+        - name: model_name
           in: path
           required: true
           schema:
             type: string
-          description: ID of the model to delete
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0)
       responses:
         '200':
-          description: Model deleted successfully
+          description: Model version deleted successfully
           content:
             application/json:
               schema:
@@ -149,21 +225,160 @@ paths:
                 properties:
                   message:
                     type: string
+                    example: Model version deleted successfully
         '404':
-          description: Model not found
+          description: Model version not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
+
+  /models/{model_name}/versions/latest:
+    get:
+      summary: Get latest model version
+      description: Retrieves the latest version of a model based on semantic versioning
+      operationId: getLatestModelVersion
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+      responses:
+        '200':
+          description: Latest model file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /models/{model_name}/versions/{version}/metadata:
+    get:
+      summary: Get model metadata
+      description: Retrieves metadata for a specific version of a model
+      operationId: getModelMetadata
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0 or latest)
+      responses:
+        '200':
+          description: Model metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+        '404':
+          description: Model version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Model not found
+
+    ModelVersion:
+      type: object
+      properties:
+        filename:
+          type: string
+          example: linear_regression_model_v1.0.0.onnx
+        path:
+          type: string
+          example: /app/models/linear_regression_model_v1.0.0.onnx
+        version:
+          type: string
+          example: 1.0.0
+
+    ModelInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: linear_regression_model
+        version:
+          type: string
+          example: 1.0.0
+        path:
+          type: string
+          example: /app/models/linear_regression_model_v1.0.0.onnx
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+
+    Metadata:
+      type: object
+      properties:
+        version:
+          type: string
+          example: 1.0.0
+        training_date:
+          type: string
+          format: date-time
+          example: 2025-03-09T06:37:00.258110
+        framework:
+          type: string
+          example: PyTorch 2.1.0+cpu
+        dataset:
+          type: string
+          example: network_metrics_exp_1741030459
+        metrics:
+          type: string
+          example: '{"mse": 5336.25537109375}'
+        description:
+          type: string
+          example: Linear regression model for PRB prediction based on CQI and throughput
+        input_features:
+          type: string
+          example: '["CQI", "DRB.UEThpDl"]'
+        output_features:
+          type: string
+          example: '["min_prb_ratio"]'
+        upload_time:
+          type: string
+          format: date-time
+          example: 2025-03-09T06:37:00.300000
+        model_name:
+          type: string
+          example: linear_regression_model

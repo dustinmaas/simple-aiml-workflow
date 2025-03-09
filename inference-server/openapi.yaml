@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
   title: Inference Server API
-  description: API for making predictions with PyTorch models
-  version: 1.0.0
+  description: API for making predictions with versioned ONNX models
+  version: 0.1.0
 servers:
-  - url: http://localhost:5002
+  - url: http://localhost:5000
     description: Local development
 paths:
   /health:
@@ -26,7 +26,7 @@ paths:
   /predict:
     post:
       summary: Make predictions
-      description: Make predictions using loaded models
+      description: Make predictions using versioned models
       operationId: predict
       requestBody:
         required: true
@@ -40,11 +40,21 @@ paths:
                 features:
                   type: array
                   items:
-                    type: number
-                  description: Input features for model prediction
-                model_id:
+                    oneOf:
+                      - type: number
+                      - type: array
+                        items:
+                          type: number
+                  description: Input features for model prediction (single instance or batch)
+                  example: [[10.0, 100.0], [8.0, 80.0]]
+                model_name:
                   type: string
-                  description: ID of the model to use (defaults to 'latest')
+                  description: Name of the model to use
+                  example: linear_regression_model
+                model_version:
+                  type: string
+                  description: Version of the model to use (defaults to 'latest')
+                  example: 1.0.0
       responses:
         '200':
           description: Prediction results
@@ -56,29 +66,27 @@ paths:
                   predictions:
                     type: array
                     items:
-                      type: number
+                      oneOf:
+                        - type: number
+                        - type: array
+                          items:
+                            type: number
                     description: Model prediction results
-                  model_id:
-                    type: string
-                    description: ID of the model used for prediction
+                    example: [[70.22], [72.95]]
+                  model:
+                    $ref: '#/components/schemas/ModelInfo'
         '400':
           description: Invalid request
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                $ref: '#/components/schemas/Error'
   /models:
     get:
       summary: List available models
@@ -90,25 +98,110 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    id:
-                      type: string
-                      example: model1
-                    file:
-                      type: string
-                      example: model1.pt
-                    path:
-                      type: string
-                      example: /app/models/model1.pt
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ModelVersion'
+                example:
+                  linear_regression_model:
+                    - filename: linear_regression_model_v1.0.0.onnx
+                      path: /app/models/linear_regression_model_v1.0.0.onnx
+                      version: 1.0.0
+                    - filename: linear_regression_model_v1.0.1.onnx
+                      path: /app/models/linear_regression_model_v1.0.1.onnx
+                      version: 1.0.1
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
+                $ref: '#/components/schemas/Error'
+  
+  /models/{model_name}/versions:
+    get:
+      summary: List model versions
+      description: Returns a list of all available versions for a specific model
+      operationId: listModelVersions
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+      responses:
+        '200':
+          description: List of model versions
+          content:
+            application/json:
+              schema:
                 type: object
                 properties:
-                  error:
+                  model:
                     type: string
+                    example: linear_regression_model
+                  versions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModelVersion'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Model not found or error making prediction
+
+    ModelVersion:
+      type: object
+      properties:
+        filename:
+          type: string
+          example: linear_regression_model_v1.0.0.onnx
+        path:
+          type: string
+          example: /app/models/linear_regression_model_v1.0.0.onnx
+        version:
+          type: string
+          example: 1.0.0
+
+    ModelInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: linear_regression_model
+        version:
+          type: string
+          example: 1.0.0
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+    
+    Metadata:
+      type: object
+      properties:
+        training_date:
+          type: string
+          format: date-time
+          example: 2025-03-09T06:37:00.258110
+        description:
+          type: string
+          example: Linear regression model for PRB prediction based on CQI and throughput
+        metrics:
+          type: string
+          example: '{"mse": 5336.25537109375}'
