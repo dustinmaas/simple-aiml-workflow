@@ -286,7 +286,7 @@ model.eval()
 
 # Model name and version info
 model_name = "linear_regression_model"
-model_version = "1.0.1"  # Follow semantic versioning: major.minor.patch
+model_version = "1.0.2"  # Follow semantic versioning: major.minor.patch
 
 # Calculate loss as a metric
 with torch.no_grad():
@@ -357,7 +357,7 @@ os.rmdir(temp_dir)
 import onnxruntime as ort
 
 model_name = "linear_regression_model"
-model_version = "1.0.1"  # Specific version or use "/latest" to get the latest version
+model_version = "1.0.2"  # Specific version or use "/latest" to get the latest version
 
 # Option 1: Get specific version
 response = requests.get(f'{model_server_url}/models/{model_name}/versions/{model_version}')

@@ -19,4 +19,4 @@ RUN mkdir -p /app/models
 EXPOSE 5000
 
 # Set the entrypoint
-CMD ["python", "app.py"] 
+CMD ["python", "app.py"]

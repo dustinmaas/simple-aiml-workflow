@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Test script for the model versioning functionality in the model server.
+Pytest-based tests for the model versioning functionality in the model server.
 
-This script tests:
+This module tests:
 1. Creating and uploading models with version information
 2. Listing available model versions
 3. Retrieving specific model versions
 4. Getting the latest version of a model
+5. Getting model metadata
 """
 
 import os
-import sys
 import torch
 import torch.onnx
 import json
 import requests
 import tempfile
-import numpy as np
+import pytest
 from datetime import datetime
 import onnx
 
@@ -32,10 +32,8 @@ class SimpleLinearModel(torch.nn.Module):
     def forward(self, x):
         return self.linear(x)
 
-def create_and_upload_model(model_name, version):
-    """Create a simple test model and upload it with versioning information."""
-    print(f"Creating test model: {model_name} (version {version})...")
-    
+def create_and_export_model(model_name, version):
+    """Create a simple test model and export it to ONNX format."""
     # Create a simple model
     model = SimpleLinearModel()
     model.eval()
@@ -70,7 +68,6 @@ def create_and_upload_model(model_name, version):
     )
     
     # Add metadata after export using onnx library
-    import onnx
     onnx_model = onnx.load(temp_model_path)
     
     # Add metadata as model properties
@@ -82,117 +79,129 @@ def create_and_upload_model(model_name, version):
     # Save the model with metadata
     onnx.save(onnx_model, temp_model_path)
     
-    print(f"Model exported to {temp_model_path}")
-    
-    # Upload to model server with separate metadata
-    print(f"Uploading model to {MODEL_SERVER_URL}/models/{model_name}/versions/{version}...")
-    
-    with open(temp_model_path, 'rb') as f:
+    return temp_dir, temp_model_path, metadata_props
+
+def upload_model(model_name, version, model_path, metadata):
+    """Upload a model to the model server."""
+    with open(model_path, 'rb') as f:
         files = {'model': f}
-        form_data = {'metadata': json.dumps(metadata_props)}
+        form_data = {'metadata': json.dumps(metadata)}
         response = requests.post(
             f"{MODEL_SERVER_URL}/models/{model_name}/versions/{version}",
             files=files,
             data=form_data
         )
     
-    if response.status_code == 200:
-        print(f"Model uploaded successfully: {response.json()}")
-        success = True
-    else:
-        print(f"Error uploading model: {response.status_code} - {response.text}")
-        success = False
-    
-    # Clean up
-    os.remove(temp_model_path)
-    os.rmdir(temp_dir)
-    
-    return success
+    return response
 
-def test_versioning_apis():
-    """Test the versioning APIs of the model server."""
+def delete_model_versions(model_name, versions):
+    """Delete specific model versions if they exist."""
+    for version in versions:
+        try:
+            requests.delete(f"{MODEL_SERVER_URL}/models/{model_name}/versions/{version}")
+        except Exception as e:
+            print(f"Error deleting model {model_name} version {version}: {e}")
+
+@pytest.fixture(scope="module")
+def test_models():
+    """Fixture to create and upload test models."""
     model_name = "test_model"
     
-    # Test 1: Upload two versions of the model
-    print("\n--- Test 1: Uploading multiple model versions ---")
-    success1 = create_and_upload_model(model_name, "1.0.0")
-    success2 = create_and_upload_model(model_name, "1.0.1")
+    # Delete any existing test models first
+    delete_model_versions(model_name, ["1.0.0", "1.0.1"])
     
-    if not (success1 and success2):
-        print("Failed to upload test models.")
-        return False
+    # Create and export models
+    temp_dir1, model_path1, metadata1 = create_and_export_model(model_name, "1.0.0")
+    temp_dir2, model_path2, metadata2 = create_and_export_model(model_name, "1.0.1")
     
-    # Test 2: List all models
-    print("\n--- Test 2: Listing all models ---")
+    # Upload models
+    response1 = upload_model(model_name, "1.0.0", model_path1, metadata1)
+    response2 = upload_model(model_name, "1.0.1", model_path2, metadata2)
+    
+    # Check if uploads were successful
+    assert response1.status_code == 200, f"Failed to upload model 1.0.0: {response1.text}"
+    assert response2.status_code == 200, f"Failed to upload model 1.0.1: {response2.text}"
+    
+    yield model_name
+    
+    # Clean up temporary files
+    import os
+    os.remove(model_path1)
+    os.remove(model_path2)
+    os.rmdir(temp_dir1)
+    os.rmdir(temp_dir2)
+
+def test_upload_models(test_models):
+    """Test uploading multiple versions of a model."""
+    model_name = test_models
+    
+    # Try to upload a model with an existing version (should fail with 409)
+    temp_dir, model_path, metadata = create_and_export_model(model_name, "1.0.0")
+    response = upload_model(model_name, "1.0.0", model_path, metadata)
+    
+    # Clean up
+    os.remove(model_path)
+    os.rmdir(temp_dir)
+    
+    # This should fail with 409 Conflict since we're trying to upload a duplicate version
+    assert response.status_code == 409, "Expected 409 Conflict for duplicate version upload"
+    assert "already exists" in response.text, "Expected 'already exists' message in error response"
+
+def test_list_models(test_models):
+    """Test listing all models."""
+    model_name = test_models
+    
     response = requests.get(f"{MODEL_SERVER_URL}/models")
-    if response.status_code == 200:
-        models = response.json()
-        print(json.dumps(models, indent=2))
-        if not models or model_name not in models:
-            print(f"Error: Did not find {model_name} in model list")
-            return False
-    else:
-        print(f"Error listing models: {response.status_code} - {response.text}")
-        return False
+    assert response.status_code == 200, f"Failed to list models: {response.text}"
     
-    # Test 3: List model versions
-    print("\n--- Test 3: Listing model versions ---")
+    models = response.json()
+    assert model_name in models, f"Model {model_name} not found in model list"
+    assert len(models[model_name]) >= 2, f"Expected at least 2 versions for {model_name}"
+
+def test_list_model_versions(test_models):
+    """Test listing versions of a specific model."""
+    model_name = test_models
+    
     response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions")
-    if response.status_code == 200:
-        versions = response.json()
-        print(json.dumps(versions, indent=2))
-        if not versions.get("versions") or len(versions.get("versions")) != 2:
-            print(f"Error: Expected 2 versions, got {len(versions.get('versions', []))}")
-            return False
-    else:
-        print(f"Error listing model versions: {response.status_code} - {response.text}")
-        return False
+    assert response.status_code == 200, f"Failed to list model versions: {response.text}"
     
-    # Test 4: Get latest version
-    print("\n--- Test 4: Getting latest version ---")
+    versions = response.json()
+    assert "versions" in versions, "Response missing 'versions' key"
+    assert len(versions["versions"]) >= 2, f"Expected at least 2 versions, got {len(versions.get('versions', []))}"
+    
+    # Check version ordering
+    assert versions["versions"][0]["version"] == "1.0.0", "First version should be 1.0.0"
+    assert versions["versions"][1]["version"] == "1.0.1", "Second version should be 1.0.1"
+
+def test_get_latest_version(test_models):
+    """Test getting the latest version of a model."""
+    model_name = test_models
+    
     response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions/latest")
-    if response.status_code == 200:
-        print(f"Successfully retrieved latest version")
-    else:
-        print(f"Error getting latest version: {response.status_code} - {response.text}")
-        return False
+    assert response.status_code == 200, f"Failed to get latest version: {response.text}"
     
-    # Test 5: Get specific version
-    print("\n--- Test 5: Getting specific version ---")
+    # We can't easily check the content as it's a binary file
+    # But status code 200 indicates success
+
+def test_get_specific_version(test_models):
+    """Test getting a specific version of a model."""
+    model_name = test_models
+    
     response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions/1.0.0")
-    if response.status_code == 200:
-        print(f"Successfully retrieved version 1.0.0")
-    else:
-        print(f"Error getting specific version: {response.status_code} - {response.text}")
-        return False
+    assert response.status_code == 200, f"Failed to get specific version: {response.text}"
     
-    # Test 6: Get model metadata
-    print("\n--- Test 6: Getting model metadata ---")
+    # We can't easily check the content as it's a binary file
+    # But status code 200 indicates success
+
+def test_get_model_metadata(test_models):
+    """Test getting metadata for a model version."""
+    model_name = test_models
+    
     response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions/1.0.0/metadata")
-    if response.status_code == 200:
-        metadata = response.json()
-        print(json.dumps(metadata, indent=2))
-        if not metadata or "version" not in metadata:
-            print(f"Error: Metadata missing version information")
-            return False
-        print(f"Successfully retrieved metadata for version 1.0.0")
-    else:
-        print(f"Error getting metadata: {response.status_code} - {response.text}")
-        return False
+    assert response.status_code == 200, f"Failed to get metadata: {response.text}"
     
-    print("\nAll tests passed!")
-    return True
-
-def main():
-    """Main function to run the tests."""
-    print(f"Testing model server versioning APIs at {MODEL_SERVER_URL}")
-    
-    if test_versioning_apis():
-        print("\nModel versioning system is working correctly!")
-        return 0
-    else:
-        print("\nModel versioning tests failed.")
-        return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
+    metadata = response.json()
+    assert "version" in metadata, "Metadata missing version information"
+    assert metadata["version"] == "1.0.0", f"Expected version 1.0.0, got {metadata.get('version')}"
+    assert "description" in metadata, "Metadata missing description"
+    assert "test_dataset" in metadata["dataset"], "Metadata missing or incorrect dataset info"

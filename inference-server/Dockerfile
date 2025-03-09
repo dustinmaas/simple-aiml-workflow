@@ -13,7 +13,7 @@ RUN uv pip install --system --no-cache -r requirements.txt
 COPY . /app/
 
 # Expose the API port
-EXPOSE 8888
+EXPOSE 5000
 
 # Set the entrypoint
-CMD ["python", "app.py"] 
+CMD ["python", "app.py"]
