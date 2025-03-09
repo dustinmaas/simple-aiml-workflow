@@ -8,16 +8,22 @@ services:
       - "8086:8086"
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=ric_admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=ric_password
-      - DOCKER_INFLUXDB_INIT_ORG=ric
-      - DOCKER_INFLUXDB_INIT_BUCKET=network_metrics
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=ric_admin_token
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
     volumes:
       - influxdb-data:/var/lib/influxdb2
     networks:
       - ai-ml-network
       - oran-sc-ric_ric_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+      start_period: 10s
 
   # Model Server - Stores and serves PyTorch models
   model-server:
@@ -31,6 +37,12 @@ services:
       - MODEL_DIRECTORY=/data/models
     networks:
       - ai-ml-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:5000/health').status_code == 200 else 1)"]
+      interval: 5s
+      timeout: 1s
+      retries: 10
+      start_period: 10s
 
   # Inference Server - Provides inference API for models
   inference-server:
@@ -46,6 +58,12 @@ services:
     networks:
       - ai-ml-network
       - oran-sc-ric_ric_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:5000/health').status_code == 200 else 1)"]
+      interval: 5s
+      timeout: 1s
+      retries: 10
+      start_period: 10s
 
   # Analysis and Training Environment - Jupyter Lab for data analysis and model training
   analysis-and-training:
@@ -66,6 +84,12 @@ services:
       - ai-ml-network
       - oran-sc-ric_ric_network
     command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8888').getcode() == 200 else 1)"]
+      interval: 5s
+      timeout: 1s
+      retries: 10
+      start_period: 10s
 
 networks:
   ai-ml-network:
