@@ -275,52 +275,76 @@ for epoch in range(num_epochs):
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
 # %% 
-# convert to onnx and save
+# convert to onnx and save with versioning
 import torch.onnx
-
-# Export the model to ONNX
+import datetime
+import json
+import onnx
 
 # Set the model to inference mode
 model.eval()
 
-# PyTorch needs to trace the operations inside the model to generate the computational graph.
-# During this tracing process, PyTorch will simulate a forward pass using the dummy_input.
+# Model name and version info
+model_name = "linear_regression_model"
+model_version = "1.0.1"  # Follow semantic versioning: major.minor.patch
+
+# Calculate loss as a metric
+with torch.no_grad():
+    y_pred = model(X)
+    loss = criterion(y_pred, (y - model.y_mean) / model.y_std).item()
+
+# Metadata to include with the model
+metadata_props = {
+    "version": model_version,
+    "training_date": datetime.datetime.now().isoformat(),
+    "framework": f"PyTorch {torch.__version__}",
+    "dataset": "network_metrics_exp_1741030459",
+    "metrics": json.dumps({"mse": loss}),
+    "description": "Linear regression model for PRB prediction based on CQI and throughput",
+    "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
+    "output_features": json.dumps(["min_prb_ratio"])
+}
+
+# PyTorch needs to trace the operations inside the model to generate the computational graph
 dummy_input = torch.randn(1, 2)  # Example dummy input for export
 
-# use a temp file for export before uploading to model server
+# Use a temp file for export before uploading to model server
 temp_dir = tempfile.mkdtemp()
-temp_model_path = os.path.join(temp_dir, "linear_regression_model.onnx")
-torch.onnx.export(model, dummy_input, temp_model_path, verbose=True, 
-                  input_names=["input"], output_names=["output"], 
-                  dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}})
+temp_model_path = os.path.join(temp_dir, f"{model_name}_v{model_version}.onnx")
 
-print(f"ONNX model saved at {temp_model_path}")
+# Export the model to ONNX without any embedded metadata
+torch.onnx.export(
+    model, 
+    dummy_input, 
+    temp_model_path, 
+    verbose=True, 
+    input_names=["input"], 
+    output_names=["output"], 
+    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
+)
 
+# No longer adding metadata directly to the ONNX file
+# It will be sent separately via the API
+
+print(f"ONNX model saved at {temp_model_path} with version {model_version}")
 
 # %%
-# Save the model to a temporary file
-model_id = "linear_regression_model_v1"
-# temp_dir = tempfile.mkdtemp()
-# temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
-
-# # Set model to evaluation mode
-# model.eval()
-
-# # Convert the model to TorchScript
-# scripted_model = model.to_torchscript()
-
-# # Save model
-# scripted_model.save(temp_model_path)
-
+# Upload model to model server with versioning
 model_server_url = os.getenv("MODEL_SERVER_URL", "http://model-server:5000")
 
-# Send to model server via REST API
+# Send to model server via REST API using the versioned endpoint with metadata
 with open(temp_model_path, 'rb') as f:
     files = {'model': f}
-    response = requests.post(f'http://model-server:5000/models/{model_id}', files=files)
+    form_data = {'metadata': json.dumps(metadata_props)}
+    upload_url = f"{model_server_url}/models/{model_name}/versions/{model_version}"
+    response = requests.post(upload_url, files=files, data=form_data)
     
 if response.status_code == 200:
-    print("Model successfully uploaded to model server")
+    print(f"Model {model_name} version {model_version} successfully uploaded to model server")
+    print(f"Response: {response.json()}")
+elif response.status_code == 409:
+    print(f"Version {model_version} already exists. Consider incrementing the version number.")
+    # Alternatively, could auto-increment the patch version here
 else:
     print(f"Error uploading model: {response.text}")
     
@@ -329,54 +353,66 @@ os.remove(temp_model_path)
 os.rmdir(temp_dir)
 
 # %%
-# Get model from model server
-model_id = "linear_regression_v1"
-response = requests.get(f'http://model-server:5000/models/{model_id}')
+# Get model from model server using versioning APIs
+import onnxruntime as ort
+
+model_name = "linear_regression_model"
+model_version = "1.0.1"  # Specific version or use "/latest" to get the latest version
+
+# Option 1: Get specific version
+response = requests.get(f'{model_server_url}/models/{model_name}/versions/{model_version}')
+
+# Option 2: Get latest version
+# response = requests.get(f'{model_server_url}/models/{model_name}/versions/latest')
 
 if response.status_code == 200:
     # Create temp file to save the downloaded model
     temp_dir = tempfile.mkdtemp()
-    temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+    temp_model_path = os.path.join(temp_dir, f"{model_name}_v{model_version}.onnx")
     
     # Save the model to the temp file
     with open(temp_model_path, 'wb') as f:
         f.write(response.content)
     
-    # Load the checkpoint with the model
-    loaded_model = torch.jit.load(temp_model_path)
+    # Load the ONNX model with onnxruntime for inference
+    ort_session = ort.InferenceSession(temp_model_path)
     
-    # Verify model parameters
-    print(f"Model ID: {model_id}")
-    print(f"X mean: {loaded_model.x_mean}")
-    print(f"X std: {loaded_model.x_std}")
-    print(f"Y mean: {loaded_model.y_mean}")
-    print(f"Y std: {loaded_model.y_std}")
+    # Get metadata from the metadata endpoint
+    metadata_response = requests.get(f'{model_server_url}/models/{model_name}/versions/{model_version}/metadata')
+    if metadata_response.status_code == 200:
+        metadata = metadata_response.json()
+        print("Metadata retrieved from separate endpoint")
+    else:
+        # Fall back to embedded metadata if available
+        print("Metadata endpoint not available, trying embedded metadata")
+        metadata = {prop.key: prop.value for prop in ort_session.get_modelmeta().custom_metadata_map.items()}
+    
+    # Print model info
+    print(f"Model: {model_name} (version {model_version})")
+    print(f"Training date: {metadata.get('training_date', 'unknown')}")
+    print(f"Metrics: {metadata.get('metrics', 'unknown')}")
+    print(f"Description: {metadata.get('description', 'unknown')}")
+    
+    # Test inference with the model
+    test_input = np.array([[10.0, 100.0]], dtype=np.float32)  # Example CQI and throughput
+    outputs = ort_session.run(
+        None,  # output names, None means return all outputs
+        {"input": test_input}  # input data
+    )
+    print(f"\nTest inference:")
+    print(f"Input (CQI, Throughput): {test_input}")
+    print(f"Predicted min_prb_ratio: {outputs[0]}")
     
     # Cleanup
+    del ort_session
     os.remove(temp_model_path)
     os.rmdir(temp_dir)
     
-    print("Model successfully loaded from model server")
+    print("\nModel successfully loaded from model server")
 else:
     print(f"Error downloading model: {response.text}")
 
 
-
-
-# %%
-# generate some predictions across a range of input vals
-with torch.no_grad():
-    test_input = np.zeros((10 * 16, 2))
-    for ii in range(10):
-        test_input[ii * 16:ii * 16 + 16, 0] = ii + 6
-        test_input[ii * 16:ii * 16 + 16, 1] = np.arange(50, 210, 10)
-    test_input = torch.tensor(test_input, dtype=torch.float).to(device)
-    
-    # Make prediction with denormalization
-    predicted = loaded_model(test_input, denormalize=True)
-    
-    print(f'Predicted values:')
-    print(np.concatenate((test_input.cpu().numpy(), predicted.cpu().numpy()), axis=1))
 
 
 # %%
@@ -390,8 +426,12 @@ learned_bias = model.linear.bias.data.cpu().numpy()
 print("\nLearned Hyperplane (in scaled space):")
 print(f"y_scaled = {learned_weights[0][0]:.2f}*x1_scaled + {learned_weights[0][1]:.2f}*x2_scaled + {learned_bias[0]:.2f}")
 
+# Get feature normalization parameters from the batch normalization layer
+x_mean = model.batch_norm.running_mean.cpu().numpy().reshape(1, -1)
+x_std = torch.sqrt(model.batch_norm.running_var).cpu().numpy().reshape(1, -1)
+
 # Create scaled versions of features and targets using the model's normalization parameters
-features_scaled = (X.cpu().numpy() - model.x_mean.cpu().numpy()) / model.x_std.cpu().numpy()
+features_scaled = (X.cpu().numpy() - x_mean) / x_std
 targets_scaled = (y.cpu().numpy() - model.y_mean.cpu().numpy()) / model.y_std.cpu().numpy()
 
 # Get original unscaled data
@@ -408,9 +448,9 @@ x1_range = np.linspace(features_unscaled[:,0].min(), features_unscaled[:,0].max(
 x2_range = np.linspace(features_unscaled[:,1].min(), features_unscaled[:,1].max(), 20)
 X1, X2 = np.meshgrid(x1_range, x2_range)
 
-# Convert meshgrid to scaled space for prediction
-X1_scaled = (X1 - model.x_mean.cpu().numpy()[0, 0]) / model.x_std.cpu().numpy()[0, 0]
-X2_scaled = (X2 - model.x_mean.cpu().numpy()[0, 1]) / model.x_std.cpu().numpy()[0, 1]
+# Convert meshgrid to scaled space for prediction using the batch normalization parameters
+X1_scaled = (X1 - x_mean[0, 0]) / x_std[0, 0]
+X2_scaled = (X2 - x_mean[0, 1]) / x_std[0, 1]
 
 # Calculate predictions in scaled space
 Y_predicted_scaled = learned_weights[0][0] * X1_scaled + learned_weights[0][1] * X2_scaled + learned_bias[0]
@@ -471,5 +511,5 @@ fig.update_layout(
 
 # Show the interactive plot
 fig.show()
-# %%
 
+# %%
