@@ -11,8 +11,9 @@ import logging
 import json
 import pickle
 from flask import Flask, request, jsonify, send_file
-import torch
 from werkzeug.utils import secure_filename
+import onnxruntime as ort
+import numpy as np
 
 
 # Configure logging
@@ -86,7 +87,14 @@ def upload_model(model_id):
     
     # Validate model
     try:
-        load_model(model_id)
+        session = load_model(model_id)
+        test_input_data = np.array([[10.0, 90.0]], dtype=np.float32)  # Example input (batch size 1, 2 features)
+
+        # Run inference
+        outputs = session.run(None, {"input": test_input_data})  # 'input' is the input name used during export
+        del session
+        logger.info(f"Model {model_id} uploaded successfully")
+        logger.info(f"Test inputs/outputs: {test_input_data} -> {outputs}")
         return jsonify({"success": True, "message": f"Model {model_id} uploaded successfully"}), 200
     except Exception as e:
         # If validation fails, remove the file
@@ -120,7 +128,7 @@ def load_model(model_id):
     
     try:
         # Load the checkpoint
-        model = torch.jit.load(filepath)
+        model = ort.InferenceSession(filepath)
         return model
     except Exception as e:
         raise ValueError(f"Failed to load model: {str(e)}")

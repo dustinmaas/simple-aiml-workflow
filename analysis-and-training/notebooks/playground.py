@@ -28,9 +28,6 @@ from influxdb_client import InfluxDBClient
 
 # Connect to InfluxDB
 client = InfluxDBClient(url="http://metrics_influxdb:8086", token="ric_admin_token", org="ric")
-
-
-
 experiment_id = "exp_1741030459"
 query = '''
 from(bucket: "network_metrics")
@@ -232,49 +229,27 @@ class LinearRegressionModel(torch.nn.Module):
     def __init__(self):
         super(LinearRegressionModel, self).__init__()
         self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
-        self.register_buffer('x_mean', torch.zeros(2))
-        self.register_buffer('x_std', torch.ones(2))
+        
+        # Apply batch normalization to input features
+        self.batch_norm = torch.nn.BatchNorm1d(2)
+        
+        # Register buffers to store the mean and standard deviation of the output features
         self.register_buffer('y_mean', torch.zeros(1))
         self.register_buffer('y_std', torch.ones(1))
 
-    def forward(self, x: torch.Tensor, denormalize: bool = False) -> torch.Tensor:
-        x_scaled = (x - self.x_mean) / self.x_std
-        output = self.linear(x_scaled)
-        if denormalize == True:  # Explicit comparison for TorchScript compatibility
-            output = output * self.y_std + self.y_mean
-        return output
-    
-    # Add methods to make TorchScript serializable
-    def __getstate__(self):
-        return {
-            'linear.weight': self.linear.weight,
-            'linear.bias': self.linear.bias,
-            'x_mean': self.x_mean,
-            'x_std': self.x_std,
-            'y_mean': self.y_mean,
-            'y_std': self.y_std
-        }
-    
-    def __setstate__(self, state):
-        self.__init__()
-        self.linear.weight.data.copy_(state['linear.weight'])
-        self.linear.bias.data.copy_(state['linear.bias'])
-        self.x_mean.copy_(state['x_mean'])
-        self.x_std.copy_(state['x_std'])
-        self.y_mean.copy_(state['y_mean'])
-        self.y_std.copy_(state['y_std'])
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_normalized = self.batch_norm(x)
+        output = self.linear(x_normalized)
         
-    # Add a scripting method to convert the model to TorchScript
-    def to_torchscript(self):
-        self.eval()  # Set to evaluation mode
-        return torch.jit.script(self)
-
+        if not self.training:
+            with torch.no_grad():
+                output = output * self.y_std + self.y_mean
+                
+        return output
 
 # %%
 # Create and train the model
 model = LinearRegressionModel()
-model.x_mean = X.mean(dim=0, keepdim=True)
-model.x_std = X.std(dim=0, keepdim=True)
 model.y_mean = y.mean(dim=0, keepdim=True)
 model.y_std = y.std(dim=0, keepdim=True)
 model.to(device)
@@ -284,7 +259,7 @@ criterion = torch.nn.MSELoss() # Mean Squared Error
 optimizer = torch.optim.SGD(model.parameters(), lr=.05)
 
 # Train the model
-num_epochs = 500
+num_epochs = 100
 for epoch in range(num_epochs):
     model.train()
     # Forward pass
@@ -296,23 +271,48 @@ for epoch in range(num_epochs):
     optimizer.step()
     optimizer.zero_grad()
 
-    if (epoch) % 100 == 0:
+    if (epoch) % 10 == 0:
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+# %% 
+# convert to onnx and save
+import torch.onnx
+
+# Export the model to ONNX
+
+# Set the model to inference mode
+model.eval()
+
+# PyTorch needs to trace the operations inside the model to generate the computational graph.
+# During this tracing process, PyTorch will simulate a forward pass using the dummy_input.
+dummy_input = torch.randn(1, 2)  # Example dummy input for export
+
+# use a temp file for export before uploading to model server
+temp_dir = tempfile.mkdtemp()
+temp_model_path = os.path.join(temp_dir, "linear_regression_model.onnx")
+torch.onnx.export(model, dummy_input, temp_model_path, verbose=True, 
+                  input_names=["input"], output_names=["output"], 
+                  dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}})
+
+print(f"ONNX model saved at {temp_model_path}")
+
 
 # %%
 # Save the model to a temporary file
-model_id = "linear_regression_v1"
-temp_dir = tempfile.mkdtemp()
-temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
+model_id = "linear_regression_model_v1"
+# temp_dir = tempfile.mkdtemp()
+# temp_model_path = os.path.join(temp_dir, f"{model_id}.pt")
 
-# Set model to evaluation mode
-model.eval()
+# # Set model to evaluation mode
+# model.eval()
 
-# Convert the model to TorchScript
-scripted_model = model.to_torchscript()
+# # Convert the model to TorchScript
+# scripted_model = model.to_torchscript()
 
-# Save model
-scripted_model.save(temp_model_path)
+# # Save model
+# scripted_model.save(temp_model_path)
+
+model_server_url = os.getenv("MODEL_SERVER_URL", "http://model-server:5000")
 
 # Send to model server via REST API
 with open(temp_model_path, 'rb') as f:
