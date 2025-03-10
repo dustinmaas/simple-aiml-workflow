@@ -18,7 +18,7 @@ services:
     networks:
       - ai-ml-test-network
       - oran-sc-ric_ric_network
-    healthcheck:
+    healthcheck: &default-test-health-check
       test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
       interval: 10s
       timeout: 2s
@@ -32,6 +32,7 @@ services:
       - "5001:5000"
     volumes:
       - ./model-server:/app
+      - ./shared:/app/shared
       - model-data-test:/data/models
       - model-db-test:/data/db
     environment:
@@ -40,11 +41,10 @@ services:
     networks:
       - ai-ml-test-network
     healthcheck:
+      <<: *default-test-health-check
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
 
   # Inference Server - Provides inference API for models
   inference-server:
@@ -53,6 +53,7 @@ services:
       - "5002:5000"
     volumes:
       - ./inference-server:/app
+      - ./shared:/app/shared
       - inference-cache-test:/app/cache/models
     depends_on:
       - model-server
@@ -64,11 +65,10 @@ services:
       - ai-ml-test-network
       - oran-sc-ric_ric_network
     healthcheck:
+      <<: *default-test-health-check
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
 
   # Analysis and Training Environment - Jupyter Lab for data analysis and model training
   analysis-and-training:
@@ -90,11 +90,10 @@ services:
       - oran-sc-ric_ric_network
     command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=${JUPYTER_TOKEN}
     healthcheck:
+      <<: *default-test-health-check
       test: ["CMD", "curl", "-f", "http://localhost:8888"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
 
 networks:
   ai-ml-test-network:

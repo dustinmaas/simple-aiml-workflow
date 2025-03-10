@@ -21,7 +21,7 @@ sleep 5
 
 # Create test models
 echo "Creating test models..."
-sudo docker compose -f docker-compose.test.yml exec model-server python create_test_models.py
+sudo docker compose -f docker-compose.test.yml exec model-server python -c "import sys; sys.path.insert(0, '/app'); from shared.create_test_models import main; main()"
 
 # Run tests
 echo "Running tests..."

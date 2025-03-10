@@ -112,8 +112,9 @@ def get_model_by_name_version(model_name, version):
         The model file as attachment
     """
     try:
-        model_info = db.get_model_by_name_version(model_name, version)
-        if not model_info:
+        try:
+            model_info = db.get_model_by_name_version(model_name, version)
+        except ModelNotFoundError:
             return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
 
         # Extract the storage UUID from the file path
@@ -138,9 +139,11 @@ def get_model_by_name_version(model_name, version):
             as_attachment=True,
             attachment_filename=filename
         )
+    except ModelNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         logger.error(f"Error getting model version: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error", "message": "An unexpected error occurred."}), 500
 
 @model_bp.route('/<model_name>', methods=['GET'])
 def get_model_versions(model_name):
@@ -264,6 +267,8 @@ def get_model_metadata_by_uuid(uuid):
         logger.error(f"Error getting model metadata by UUID: {e}")
         return jsonify({"error": str(e)}), 500
 
+from utils.database import ModelExistsError, ModelNotFoundError
+
 @model_bp.route('/<model_name>/versions/<version>', methods=['POST'])
 def upload_model_version(model_name, version):
     """
@@ -283,10 +288,6 @@ def upload_model_version(model_name, version):
     model_file = request.files['model']
     if model_file.filename == '':
         return jsonify({"error": "Empty model filename"}), 400
-        
-    # Check if the version already exists
-    if db.get_model_by_name_version(model_name, version):
-        return jsonify({"error": f"Version {version} of model {model_name} already exists"}), 409
         
     try:
         # Read the model file
@@ -311,25 +312,33 @@ def upload_model_version(model_name, version):
         # Store the model file with this UUID
         file_path, file_size = storage.store_model(single_uuid, model_data)
         
-        # Add to the database with the same UUID
-        db_result = db.add_model_with_uuid(single_uuid, model_name, version, file_path, file_size)
-        if not db_result:
-            # If db insert failed, clean up the stored file
+        try:
+            # Add to the database with the same UUID
+            db_result = db.add_model_with_uuid(single_uuid, model_name, version, file_path, file_size)
+            
+            # Add metadata to the database
+            db.add_metadata(single_uuid, metadata)
+            
+            return jsonify({
+                "success": True,
+                "message": f"Model {model_name} version {version} uploaded successfully",
+                "uuid": single_uuid,
+                "size": file_size
+            })
+        except ModelExistsError:
+            # If db insert failed due to duplicate, clean up the stored file
             storage.delete_model(single_uuid)
-            return jsonify({"error": f"Database insert failed for model {model_name} version {version}"}), 500
-        
-        # Add metadata to the database
-        db.add_metadata(single_uuid, metadata)
-        
-        return jsonify({
-            "success": True,
-            "message": f"Model {model_name} version {version} uploaded successfully",
-            "uuid": single_uuid,
-            "size": file_size
-        })
+            return jsonify({"error": f"Version {version} of model {model_name} already exists"}), 409
+        except Exception as e:
+            # If db insert failed for other reasons, clean up the stored file
+            storage.delete_model(single_uuid)
+            logger.error(f"Database operation failed: {e}")
+            raise
+    except ModelNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         logger.error(f"Error uploading model: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error", "message": "An unexpected error occurred."}), 500
 
 @model_bp.route('/<model_name>/versions/<version>', methods=['DELETE'])
 def delete_model_version(model_name, version):

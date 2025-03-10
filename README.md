@@ -16,6 +16,8 @@ flowchart TD
     IS --> MS
     AT -- Alternative Path --> HF[Hugging Face]
     IS -- Alternative Path --> HF
+    MS --> SU[Shared Utilities]
+    IS --> SU
 ```
 
 1. **Model Server** - Stores and serves trained PyTorch models converted to ONNX format
@@ -23,6 +25,7 @@ flowchart TD
 3. **Analysis and Training Environment** - Jupyter notebook environment for data analysis and model creation/training
 4. **Experiment Runner** - Tool for running end-to-end tests of the workflow
 5. **InfluxDB** - Time series database for storing metrics and experiment data
+6. **Shared Utilities** - Common ML functions and models shared between components
 
 ## Key Features
 
@@ -34,6 +37,7 @@ flowchart TD
 - Hybrid storage strategy supporting both local (Model Server) and cloud-based (Hugging Face) options
 - Comprehensive testing infrastructure with isolated test environments
 - Dynamic model input shape detection for flexible input handling
+- Shared utilities module for consistent model definition and training across components
 
 ## Getting Started
 
@@ -213,6 +217,11 @@ The project has a fully functional foundation with all core components implement
 - Dynamic model input shape detection
 - Support for cloud-based model storage via Hugging Face
 - Improved Docker configuration with health checks and environment variable management
+- Code simplification with shared ML utilities to reduce duplication
+- Enhanced inference routes with better helper functions and organized prediction logic
+- Robust module import strategies with dynamic path resolution for shared utilities
+- Fixed cross-container module sharing for reliable testing and operation
+- Improved test reliability with all 41 tests (24 model-server, 17 inference-server) passing consistently
 
 Current focus areas include:
 - Adding type hints to all Python code

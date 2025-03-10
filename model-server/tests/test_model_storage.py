@@ -257,9 +257,10 @@ class TestModelDatabase:
         result = db.delete_model(db_uuid)
         assert result is True
         
-        # Verify model is deleted
-        model_info = db.get_model_by_uuid(db_uuid)
-        assert model_info is None
+        # Verify model is deleted - should raise ModelNotFoundError
+        from utils.database import ModelNotFoundError
+        with pytest.raises(ModelNotFoundError):
+            db.get_model_by_uuid(db_uuid)
 
 class TestModelStorage:
     """Test cases for the ModelStorage class."""
