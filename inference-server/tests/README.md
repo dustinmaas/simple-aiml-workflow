@@ -21,10 +21,14 @@ This comprehensive testing approach ensures:
 
 ## Running Tests
 
-Tests can be run using the improved `run_tests.sh` script in the parent directory. This script provides a comprehensive testing workflow:
+Tests can be run using the improved `run_tests.sh` script in this directory. This script provides a comprehensive testing workflow:
 
 ```bash
+# From the tests directory
 ./run_tests.sh
+
+# Or from the project root
+./inference-server/tests/run_tests.sh
 ```
 
 The script:

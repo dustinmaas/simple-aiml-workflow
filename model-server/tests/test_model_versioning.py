@@ -20,116 +20,63 @@ import pytest
 from datetime import datetime
 import onnx
 
+# Add shared directory to path
+import sys
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(parent_dir))  # To access shared
+
+# Import shared ML and test utilities
+from shared.ml_utils import (
+    LinearRegressionModel,
+    create_and_train_model,
+    export_model_to_onnx,
+    get_default_metadata
+)
+
 # Model server URL (default when running inside the container)
 MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
 
-# Model server tests are executed in the container
-
-class LinearRegressionModel(torch.nn.Module):
-    """
-    Linear regression model with batch normalization as used in playground.py.
-    This model is designed to predict min_prb_ratio based on CQI and throughput.
-    """
-    def __init__(self):
-        super(LinearRegressionModel, self).__init__()
-        self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
-        
-        # Apply batch normalization to input features
-        self.batch_norm = torch.nn.BatchNorm1d(2)
-        
-        # Register buffers to store the mean and standard deviation of the output features
-        self.register_buffer('y_mean', torch.zeros(1))
-        self.register_buffer('y_std', torch.ones(1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_normalized = self.batch_norm(x)
-        output = self.linear(x_normalized)
-        
-        if not self.training:
-            with torch.no_grad():
-                output = output * self.y_std + self.y_mean
-                
-        return output
-
 def create_and_export_model(model_name, version):
     """Create a LinearRegressionModel and export it to ONNX format."""
-    # Create the model
-    model = LinearRegressionModel()
-    
-    # Sample data for training (same as in playground.py)
-    features = torch.tensor([
-        [10.0, 100.0],
-        [8.0, 80.0],
-        [6.0, 60.0],
-        [4.0, 40.0],
-        [2.0, 20.0]
-    ], dtype=torch.float32)
-    
-    targets = torch.tensor([
-        [50.0],
-        [60.0],
-        [70.0],
-        [80.0],
-        [90.0]
-    ], dtype=torch.float32)
-    
-    # Set the mean and std buffers
-    model.y_mean = targets.mean(dim=0, keepdim=True)
-    model.y_std = targets.std(dim=0, keepdim=True)
-    
-    # Train the model
-    model.train()
-    criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
-    
-    # Just a few epochs for testing purposes
-    for epoch in range(10):  
-        # Forward pass
-        y_predicted = model(features)
-        loss = criterion(y_predicted, (targets - model.y_mean) / model.y_std)
-        
-        # Backward and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    
-    # Set to evaluation mode
-    model.eval()
-    
-    # Create sample input for export
-    dummy_input = torch.randn(1, 2)  # Batch size of 1, 2 features (CQI, throughput)
+    # Create and train the model using the shared utility
+    model = create_and_train_model(
+        input_features=2,
+        output_features=1,
+        num_epochs=10  # Just a few epochs for testing
+    )
     
     # Create metadata with version info
-    metadata_props = {
-        "version": version,
-        "training_date": datetime.now().isoformat(),
-        "framework": f"PyTorch {torch.__version__}",
+    metadata = get_default_metadata(
+        model_name=model_name,
+        version=version,
+        description="Linear regression model for PRB prediction based on CQI and throughput",
+        input_features=["CQI", "DRB.UEThpDl"],
+        output_features=["min_prb_ratio"]
+    )
+    
+    # Add additional test-specific metadata
+    metadata.update({
         "dataset": "network_metrics_test",
-        "metrics": json.dumps({"mse": loss.item()}),
-        "description": "Linear regression model for PRB prediction based on CQI and throughput",
-        "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
-        "output_features": json.dumps(["min_prb_ratio"])
-    }
+        "test_marker": f"versioning_test_{version}"
+    })
     
     # Export to ONNX
     temp_dir = tempfile.mkdtemp()
     temp_model_path = os.path.join(temp_dir, f"{model_name}_v{version}.onnx")
     
-    torch.onnx.export(
+    export_model_to_onnx(
         model, 
-        dummy_input, 
         temp_model_path, 
-        verbose=True, 
         input_names=["input"], 
         output_names=["output"], 
         dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
     )
     
-    # Add metadata after export using onnx library
+    # Add metadata after export using onnx library (optional since we'll send it separately)
     onnx_model = onnx.load(temp_model_path)
     
     # Add metadata as model properties
-    for key, value in metadata_props.items():
+    for key, value in metadata.items():
         meta = onnx_model.metadata_props.add()
         meta.key = key
         meta.value = str(value)
@@ -137,7 +84,7 @@ def create_and_export_model(model_name, version):
     # Save the model with metadata
     onnx.save(onnx_model, temp_model_path)
     
-    return temp_dir, temp_model_path, metadata_props
+    return temp_dir, temp_model_path, metadata
 
 def upload_model(model_name, version, model_path, metadata):
     """Upload a model to the model server."""
@@ -152,9 +99,8 @@ def upload_model(model_name, version, model_path, metadata):
     # First, delete any existing model with this name and version to avoid conflicts
     try:
         delete_response = requests.delete(f"{MODEL_SERVER_URL}/models/{model_name}/versions/{version}")
-        print(f"Delete response (model {model_name} v{version}): {delete_response.status_code}")
-    except Exception as e:
-        print(f"Error during delete: {str(e)}")
+    except Exception:
+        pass
         
     # Now upload the model
     response = requests.post(
@@ -163,9 +109,6 @@ def upload_model(model_name, version, model_path, metadata):
         data=form_data
     )
     
-    if response.status_code != 200:
-        print(f"Upload failed: {response.text}")
-        
     return response
 
 def delete_model_versions(model_name, versions):
@@ -173,8 +116,8 @@ def delete_model_versions(model_name, versions):
     for version in versions:
         try:
             requests.delete(f"{MODEL_SERVER_URL}/models/{model_name}/versions/{version}")
-        except Exception as e:
-            print(f"Error deleting model {model_name} version {version}: {e}")
+        except Exception:
+            pass
 
 @pytest.fixture(scope="module")
 def test_models():
@@ -188,10 +131,6 @@ def test_models():
     temp_dir1, model_path1, metadata1 = create_and_export_model(model_name, "1.0.0")
     temp_dir2, model_path2, metadata2 = create_and_export_model(model_name, "1.0.1")
     
-    print(f"Test models created with metadata:")
-    print(f"Model 1.0.0 metadata: {json.dumps(metadata1, indent=2)}")
-    print(f"Model 1.0.1 metadata: {json.dumps(metadata2, indent=2)}")
-    
     # Upload models
     response1 = upload_model(model_name, "1.0.0", model_path1, metadata1)
     response2 = upload_model(model_name, "1.0.1", model_path2, metadata2)
@@ -200,21 +139,15 @@ def test_models():
     assert response1.status_code == 200, f"Failed to upload model 1.0.0: {response1.text}"
     assert response2.status_code == 200, f"Failed to upload model 1.0.1: {response2.text}"
     
-    print(f"Response from uploading model 1.0.0: {response1.json()}")
-    print(f"Response from uploading model 1.0.1: {response2.json()}")
-    
     # Verify models were added to the server
     list_response = requests.get(f"{MODEL_SERVER_URL}/models")
     assert list_response.status_code == 200, f"Failed to list models: {list_response.text}"
     models = list_response.json()
-    print(f"Available models: {json.dumps(models, indent=2)}")
     assert model_name in models, f"Model '{model_name}' not found in models list: {models}"
     
     # Verify versions are available
     versions_response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions")
     assert versions_response.status_code == 200, f"Failed to get model versions: {versions_response.text}"
-    versions = versions_response.json()
-    print(f"Available versions: {json.dumps(versions, indent=2)}")
     
     yield model_name
     
@@ -232,8 +165,8 @@ def test_models():
         
         # Delete test models from server
         delete_model_versions(model_name, ["1.0.0", "1.0.1"])
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
+    except Exception:
+        pass
 
 def test_upload_models(test_models):
     """Test uploading multiple versions of a model."""
@@ -315,8 +248,6 @@ def test_get_latest_version(test_models):
     assert model_name in models, f"Model {model_name} not found in model list: {models}"
     assert len(models[model_name]) >= 1, f"No versions found for model {model_name}: {models}"
     
-    print(f"Available models for test_get_latest_version: {json.dumps(models, indent=2)}")
-    
     # Explicitly recreate (delete & upload) the 1.0.1 version since it should be latest
     # This ensures we have a fresh model file in the storage
     temp_dir, model_path, metadata = create_and_export_model(model_name, "1.0.1")
@@ -351,8 +282,6 @@ def test_get_specific_version(test_models):
         # List models to make sure it exists
         list_response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions")
         assert list_response.status_code == 200, f"Failed to list versions: {list_response.text}"
-        versions = list_response.json()
-        print(f"Available versions for test_get_specific_version: {json.dumps(versions, indent=2)}")
         
         # Now get the specific version
         response = requests.get(f"{MODEL_SERVER_URL}/models/{model_name}/versions/{version}")
@@ -385,7 +314,6 @@ def test_get_model_metadata(test_models):
         assert response.status_code == 200, f"Failed to get metadata: {response.text}"
         
         retrieved_metadata = response.json()
-        print(f"Retrieved metadata: {json.dumps(retrieved_metadata, indent=2)}")
         
         # Check the metadata
         assert "version" in retrieved_metadata, "Metadata missing version information"

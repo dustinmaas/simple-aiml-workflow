@@ -134,3 +134,62 @@ model_info = create_test_model("http://localhost:5000")
 # Create multiple versioned models
 versioned_models = create_versioned_test_models("http://localhost:5000")
 ```
+
+## Unified Testing Framework
+
+The shared directory now includes a consolidated testing framework for both the model-server and inference-server components. The goal is to reduce code duplication, standardize test behavior, and make the tests easier to maintain.
+
+### Test Utilities (`test_utils.py`)
+
+This module provides common utilities for all tests, including:
+
+- Model download and analysis functions
+- Input data formatting based on model shape
+- Model server connectivity checks
+- Model and metadata retrieval helpers
+- UUID extraction utilities
+
+```python
+from shared.test_utils import (
+    download_and_analyze_model,
+    create_input_data_for_shape,
+    check_model_server_availability,
+    get_available_models
+)
+```
+
+### Usage Examples
+
+To run tests using the standard test scripts:
+
+```bash
+./run_all_tests.sh                # Run all tests
+./model-server/run_tests.sh       # Run model server tests only
+./inference-server/run_tests.sh   # Run inference server tests only
+```
+
+### Example Test Code
+
+Here's an example of how the shared utilities simplify test code:
+
+```python
+def test_inference_with_uuid(self):
+    # Get the model and analyze its input shape
+    input_shape, _ = download_and_analyze_model(
+        f"{MODEL_SERVER_URL}/models/uuid/{self.test_model_uuid}"
+    )
+    
+    # Create test data based on the model shape
+    input_data = create_input_data_for_shape(input_shape)
+    
+    # Make prediction request
+    response = self.client.post(
+        f'/inference/models/uuid/{self.test_model_uuid}/predict',
+        json=input_data,
+        content_type='application/json'
+    )
+    
+    # Verify response
+    assert response.status_code == 200
+    # ... additional assertions
+```

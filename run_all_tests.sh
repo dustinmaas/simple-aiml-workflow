@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run tests for both model-server and inference-server using the test-specific compose file
+# Run tests for both model-server and inference-server by calling their respective test scripts
 
-echo "===== Starting full test suite with clean slate ====="
+echo "===== Starting full test suite ====="
 
 # Stop existing test containers if any
 echo "Stopping test containers if running..."
@@ -41,3 +41,7 @@ echo "Stopping test containers..."
 sudo docker compose -f docker-compose.test.yml down
 
 echo "All tests complete!"
+echo ""
+echo "Note: You can run individual service tests with:"
+echo "  model-server/tests/run_tests.sh    - For model server tests only"
+echo "  inference-server/tests/run_tests.sh - For inference server tests only"

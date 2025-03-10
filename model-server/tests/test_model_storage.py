@@ -21,12 +21,22 @@ import torch.onnx
 import requests
 from datetime import datetime
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directory and shared directory to path to import modules
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
 from utils.database import ModelDatabase
 from utils.storage import ModelStorage
 from utils.constants import MODEL_DB_PATH, MODEL_STORAGE_DIR
+
+# Import shared utilities
+from shared.ml_utils import (
+    LinearRegressionModel,
+    create_and_train_model,
+    export_model_to_onnx,
+    get_default_metadata
+)
 
 # Test constants
 TEST_MODEL_NAME = "test_linear_model"
@@ -36,76 +46,23 @@ TEST_API_MODEL_VERSION = "1.0.0"
 # Make the server URL configurable for container vs. host testing
 TEST_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
 
-class LinearRegressionModel(nn.Module):
-    """
-    Linear regression model with batch normalization as used in playground.py.
-    This model is designed to predict min_prb_ratio based on CQI and throughput.
-    """
-    def __init__(self):
-        super(LinearRegressionModel, self).__init__()
-        self.linear = nn.Linear(2, 1)  # two input features, one output feature
-        
-        # Apply batch normalization to input features
-        self.batch_norm = nn.BatchNorm1d(2)
-        
-        # Register buffers to store the mean and standard deviation of the output features
-        self.register_buffer('y_mean', torch.zeros(1))
-        self.register_buffer('y_std', torch.ones(1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_normalized = self.batch_norm(x)
-        output = self.linear(x_normalized)
-        
-        if not self.training:
-            with torch.no_grad():
-                output = output * self.y_std + self.y_mean
-                
-        return output
-
 @pytest.fixture
 def model_path():
     """Create a test model and return its path."""
-    # Create the LinearRegressionModel
-    model = LinearRegressionModel()
+    # Create and train the model using the shared utility
+    model = create_and_train_model(
+        input_features=2,
+        output_features=1,
+        num_epochs=10  # Just a few epochs for testing
+    )
     
-    # Sample data for training
-    features = torch.tensor([[10.0, 100.0], [8.0, 80.0], [6.0, 60.0], [4.0, 40.0], [2.0, 20.0]], dtype=torch.float32)
-    targets = torch.tensor([[50.0], [60.0], [70.0], [80.0], [90.0]], dtype=torch.float32)
-    
-    # Set the y_mean and y_std buffers
-    model.y_mean = targets.mean(dim=0, keepdim=True)
-    model.y_std = targets.std(dim=0, keepdim=True)
-    
-    # Train the model
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
-    
-    model.train()
-    for epoch in range(10):  # Just a few epochs for testing
-        # Forward pass
-        y_predicted = model(features)
-        loss = criterion(y_predicted, (targets - model.y_mean) / model.y_std)
-        
-        # Backward and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    
-    # Set to evaluation mode
-    model.eval()
-    
-    # Create dummy input for export
-    dummy_input = torch.randn(1, 2)  # Batch size of 1, 2 features (CQI, throughput)
-
     # Create a temporary file to save the model
     temp_path = tempfile.NamedTemporaryFile(suffix='.onnx', delete=False).name
 
-    # Export to ONNX
-    torch.onnx.export(
+    # Export to ONNX using the shared utility
+    export_model_to_onnx(
         model,
-        dummy_input,
         temp_path,
-        verbose=True,
         input_names=["input"],
         output_names=["output"],
         dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
@@ -188,16 +145,12 @@ class TestModelDatabase:
         # Add model to database
         db_uuid = db.add_model(model_name, version, file_path, file_size)
         
-        # Create metadata
-        metadata = {
-            "model_name": model_name,
-            "version": version,
-            "training_date": datetime.now().isoformat(),
-            "framework": f"PyTorch {torch.__version__}",
-            "description": "Test model for UUID storage",
-            "input_features": json.dumps(["feature1", "feature2"]),
-            "output_features": json.dumps(["prediction"])
-        }
+        # Create metadata using shared utility
+        metadata = get_default_metadata(
+            model_name=model_name,
+            version=version,
+            description="Test model for UUID storage"
+        )
         
         # Add metadata
         result = db.add_metadata(db_uuid, metadata)
@@ -326,14 +279,12 @@ class TestModelAPI:
         with open(model_path, 'rb') as f:
             model_data = f.read()
             
-        # Create metadata
-        metadata = {
-            "training_date": datetime.now().isoformat(),
-            "framework": f"PyTorch {torch.__version__}",
-            "description": "Test model for UUID storage API",
-            "input_features": ["feature1", "feature2"],
-            "output_features": ["prediction"]
-        }
+        # Create metadata using shared utility
+        metadata = get_default_metadata(
+            model_name=TEST_API_MODEL_NAME,
+            version=TEST_API_MODEL_VERSION,
+            description="Test model for UUID storage API"
+        )
         
         # Upload model
         files = {'model': (f"{TEST_API_MODEL_NAME}_v{TEST_API_MODEL_VERSION}.onnx", model_data)}
@@ -391,20 +342,17 @@ class TestModelAPI:
         # First, delete any existing model with this name and version
         delete_response = requests.delete(
             f"{TEST_SERVER_URL}/models/{model_name}/versions/{TEST_API_MODEL_VERSION}")
-        print(f"Delete response status: {delete_response.status_code}, text: {delete_response.text}")
         
         # Read model data
         with open(model_path, 'rb') as f:
             model_data = f.read()
             
-        # Create metadata to ensure it's properly stored
-        metadata = {
-            "training_date": datetime.now().isoformat(),
-            "framework": f"PyTorch {torch.__version__}",
-            "description": "Test model for UUID storage API - get by UUID test",
-            "input_features": ["feature1", "feature2"],
-            "output_features": ["prediction"]
-        }
+        # Create metadata using shared utility
+        metadata = get_default_metadata(
+            model_name=model_name,
+            version=TEST_API_MODEL_VERSION,
+            description="Test model for UUID storage API - get by UUID test"
+        )
             
         # Upload model with metadata
         files = {'model': (f"{model_name}_v{TEST_API_MODEL_VERSION}.onnx", model_data)}
@@ -423,20 +371,16 @@ class TestModelAPI:
         assert "uuid" in result, f"UUID not found in response: {result}"
         model_uuid = result["uuid"]
         
-        print(f"Model uploaded with UUID: {model_uuid}")
-        
         # List all models to verify the model was added and get the actual registered UUID
         list_response = requests.get(f"{TEST_SERVER_URL}/models")
         assert list_response.status_code == 200, f"Failed to list models: {list_response.text}"
         models = list_response.json()
-        print(f"Available models: {json.dumps(models, indent=2)}")
         
         # Make sure the model exists in the list
         assert f"{model_name}" in models, f"Model not found in models list: {models}"
         
         # Extract the actual UUID from the listing (which may differ from what was returned during upload)
         actual_uuid = models[model_name][0]["uuid"]
-        print(f"Upload returned UUID: {model_uuid}, but database has UUID: {actual_uuid}")
         
         # Get model by the UUID from the database listing
         response = requests.get(f"{TEST_SERVER_URL}/models/uuid/{actual_uuid}")

@@ -12,10 +12,13 @@ import tempfile
 import urllib.parse  # Added for URL parsing
 from unittest.mock import patch
 
-# Add parent directory to path to import the app module
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add parent directory and shared directory to path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
 from app_factory import create_app
+
 @pytest.fixture
 def app():
     """Create and configure a Flask app for testing."""
@@ -42,8 +45,6 @@ def test_health_endpoint(client):
     response = client.get('/health')
     assert response.status_code == 200
     assert response.json['status'] == 'healthy'
-
-# Real integration tests don't need this test
 
 def test_error_handlers(client):
     """Test that 404 errors return a JSON response."""

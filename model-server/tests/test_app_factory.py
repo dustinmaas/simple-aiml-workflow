@@ -10,8 +10,10 @@ import sys
 import pytest
 import tempfile
 
-# Add parent directory to path to import the app module
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add parent directory and shared directory to path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
 from app_factory import create_app
 

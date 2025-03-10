@@ -179,7 +179,7 @@ The `run_tests.sh` scripts provide a comprehensive testing workflow that:
 1. Stop existing containers
 2. Remove model volumes for a clean slate
 3. Start containers with fresh volumes using docker-compose.test.yml
-4. Create test models using the LinearRegressionModel from playground.py
+4. Create test models using the LinearRegressionModel from shared utilities
 5. Run all tests with detailed output
 6. Clean up test models when complete
 
@@ -205,27 +205,3 @@ OpenAPI/Swagger specifications are available for both servers:
 - Inference Server API: http://localhost:5002/apidocs/
 
 These specifications document all available endpoints, request/response schemas, and include examples.
-
-## Current Status
-
-The project has a fully functional foundation with all core components implemented. Recent developments include:
-
-- Complete ONNX integration across all components
-- Separate metadata storage system for models
-- Resolution of the UUID mismatch between database records and storage files
-- Enhanced testing framework with clean environment setup
-- Dynamic model input shape detection
-- Support for cloud-based model storage via Hugging Face
-- Improved Docker configuration with health checks and environment variable management
-- Code simplification with shared ML utilities to reduce duplication
-- Enhanced inference routes with better helper functions and organized prediction logic
-- Robust module import strategies with dynamic path resolution for shared utilities
-- Fixed cross-container module sharing for reliable testing and operation
-- Improved test reliability with all 41 tests (24 model-server, 17 inference-server) passing consistently
-
-Current focus areas include:
-- Adding type hints to all Python code
-- Refactoring and code improvements
-- API definition for the aiml_xapp
-- Documentation enhancements
-- Further improving test reliability and flexibility

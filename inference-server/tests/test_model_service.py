@@ -21,11 +21,21 @@ import onnxruntime as ort
 import numpy as np
 from datetime import datetime
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add parent directory and shared directory to path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
 from utils.model_service import ModelService
 from utils.constants import MODEL_SERVER_URL, MODEL_CACHE_DIR
+
+# Import shared test utilities
+from shared.test_utils import (
+    check_model_server_availability,
+    get_available_models,
+    get_model_detail,
+    extract_storage_uuid
+)
 
 # Test constants
 TEST_MODEL_NAME = "test_linear_model"
@@ -40,12 +50,8 @@ class TestModelService:
         self.temp_cache_dir = tempfile.mkdtemp()
         self.model_service = ModelService(cache_dir=self.temp_cache_dir)
         
-        # Test if model server is available
-        try:
-            response = requests.get(f"{MODEL_SERVER_URL}/health", timeout=5)
-            if response.status_code != 200:
-                pytest.skip("Model server is not available")
-        except (requests.ConnectionError, requests.Timeout):
+        # Test if model server is available using shared utility
+        if not check_model_server_availability(MODEL_SERVER_URL):
             pytest.skip("Model server is not available")
     
     def teardown_method(self):
@@ -55,12 +61,8 @@ class TestModelService:
     
     def test_uuid_extraction_with_real_model(self):
         """Test UUID extraction pattern with a real model from the model server."""
-        # First, check what models are available
-        response = requests.get(f"{MODEL_SERVER_URL}/models")
-        if response.status_code != 200:
-            pytest.skip("Cannot list models from model server")
-        
-        models = response.json()
+        # Get available models using shared utility
+        models = get_available_models(MODEL_SERVER_URL)
         if not models:
             pytest.skip("No models available on model server")
         
@@ -70,19 +72,17 @@ class TestModelService:
         model_version = model_info['version']
         db_uuid = model_info['uuid']
         
-        # Get the storage path from model detail
-        detail_response = requests.get(f"{MODEL_SERVER_URL}/models/uuid/{db_uuid}/detail")
-        if detail_response.status_code != 200:
-            pytest.skip(f"Cannot get model detail: {detail_response.text}")
+        # Get the model detail using shared utility
+        model_detail = get_model_detail(MODEL_SERVER_URL, db_uuid)
+        if not model_detail:
+            pytest.skip(f"Cannot get model detail for UUID {db_uuid}")
         
-        model_detail = detail_response.json()
         file_path = model_detail.get('path', '')
-        
         if not file_path:
             pytest.skip("Model file path not found in detail response")
         
-        # Extract storage UUID from file path
-        storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+        # Extract storage UUID using shared utility
+        storage_uuid = extract_storage_uuid(file_path)
         
         # Test retrieving the model using get_model_by_uuid
         model_path, metadata = self.model_service.get_model_by_uuid(db_uuid)
@@ -106,7 +106,6 @@ class TestModelService:
                 session = ort.InferenceSession(model_path, providers=providers, sess_options=session_options)
             except TypeError:
                 # Fallback for older versions where providers was a positional arg
-                print("Using legacy ONNX Runtime initialization pattern")
                 session = ort.InferenceSession(model_path, session_options, providers)
             
             # Just check we can get input and output info
@@ -117,17 +116,13 @@ class TestModelService:
             assert len(input_names) > 0, "Model has no inputs"
             assert len(output_names) > 0, "Model has no outputs"
         except Exception as e:
-            # Just log the error but don't fail the test
-            print(f"Warning: Could not run inference on model: {e}")
+            # We caught an exception but don't fail the test
+            pass
     
     def test_model_caching(self):
         """Test model caching behavior with real models."""
-        # First, check what models are available
-        response = requests.get(f"{MODEL_SERVER_URL}/models")
-        if response.status_code != 200:
-            pytest.skip("Cannot list models from model server")
-        
-        models = response.json()
+        # Get available models using shared utility
+        models = get_available_models(MODEL_SERVER_URL)
         if not models:
             pytest.skip("No models available on model server")
         

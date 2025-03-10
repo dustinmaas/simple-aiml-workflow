@@ -32,7 +32,7 @@ def server_status():
     Returns:
         JSON response with server status details
     """
-    models_dir = os.environ.get('MODELS_DIR', '/app/models')
+    models_dir = current_app.config.get('MODELS_DIR', os.environ.get('MODELS_DIR', '/app/models'))
     
     try:
         disk_free = os.statvfs(models_dir).f_bavail * os.statvfs(models_dir).f_frsize

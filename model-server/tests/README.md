@@ -13,7 +13,24 @@ The model server tests cover various aspects of the system:
 
 ## Running Tests
 
-All tests can be run directly against the live Model Server container:
+The easiest way to run tests is by using the provided script in this directory:
+
+```bash
+# From the tests directory
+./run_tests.sh
+
+# Or from the project root
+./model-server/tests/run_tests.sh
+```
+
+This script:
+1. Stops existing test containers
+2. Removes test volumes for a clean slate
+3. Starts containers with fresh volumes
+4. Runs all tests with detailed output
+5. Cleans up when complete
+
+Alternatively, tests can be run directly against the live Model Server container:
 
 ```bash
 # From the project root
