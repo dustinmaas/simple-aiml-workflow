@@ -22,17 +22,32 @@ import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
+import sys
+from pathlib import Path
+import io
+import json
+import datetime
+import onnx
+import onnxruntime as ort
+from typing import Dict, List, Any, Optional, Tuple, Union, BinaryIO
 
 # %%
 from influxdb_client import InfluxDBClient
 
-# Connect to InfluxDB
-client = InfluxDBClient(url="http://metrics_influxdb:8086", token="ric_admin_token", org="ric")
+# Connect to InfluxDB using environment variables
+client = InfluxDBClient(
+    url="http://metrics_influxdb:8086", 
+    token=os.getenv("INFLUXDB_ADMIN_TOKEN"), 
+    org=os.getenv("INFLUXDB_ORG")
+)
 experiment_id = "exp_1741030459"
-query = '''
-from(bucket: "network_metrics")
+# Get InfluxDB bucket from environment
+influx_bucket = os.getenv("INFLUXDB_BUCKET", "network_metrics")
+
+query = f'''
+from(bucket: "{influx_bucket}")
   |> range(start: 0, stop: now())
-  |> filter(fn: (r) => r.experiment_id == "exp_1741030459")
+  |> filter(fn: (r) => r.experiment_id == "{experiment_id}")
   |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   |> keep(columns: ["timestamp", "ue_id", "atten", "min_prb_ratio", "CQI", "RSRP", "DRB.UEThpDl", "DRB.RlcSduTransmittedVolumeDL"])
 '''
@@ -212,46 +227,85 @@ fig.update_traces(
 fig.show()
 
 # %%
-# device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
-# print(f"device {device}")
-device = 'cpu'
-
-features = data[['CQI','DRB.UEThpDl']].values
-targets = data[['min_prb_ratio']].values
-
-
-# Convert features and targets to PyTorch tensors
-X = torch.tensor(features, dtype=torch.float32)
-y = torch.tensor(targets, dtype=torch.float32)
-
-# %%
+# Using the LinearRegressionModel defined at the top of this notebook
+# Define the LinearRegressionModel class directly in this notebook
 class LinearRegressionModel(torch.nn.Module):
-    def __init__(self):
+    """
+    Linear regression model with batch normalization.
+    
+    This model is designed to predict min_prb_ratio based on input features
+    like CQI and throughput. It includes batch normalization for inputs and
+    stores normalization parameters for outputs to ensure consistent predictions.
+    """
+    def __init__(self, input_features: int = 2, output_features: int = 1):
+        """
+        Initialize the model with configurable feature dimensions.
+        
+        Args:
+            input_features: Number of input features (default: 2)
+            output_features: Number of output features (default: 1)
+        """
         super(LinearRegressionModel, self).__init__()
-        self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
+        self.linear = torch.nn.Linear(input_features, output_features)
         
         # Apply batch normalization to input features
-        self.batch_norm = torch.nn.BatchNorm1d(2)
+        self.batch_norm = torch.nn.BatchNorm1d(input_features)
         
         # Register buffers to store the mean and standard deviation of the output features
-        self.register_buffer('y_mean', torch.zeros(1))
-        self.register_buffer('y_std', torch.ones(1))
+        self.register_buffer('y_mean', torch.zeros(output_features))
+        self.register_buffer('y_std', torch.ones(output_features))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the model.
+        
+        Args:
+            x: Input tensor with shape [batch_size, input_features]
+            
+        Returns:
+            Output tensor with shape [batch_size, output_features]
+        """
         x_normalized = self.batch_norm(x)
         output = self.linear(x_normalized)
         
+        # Denormalize output during inference
         if not self.training:
             with torch.no_grad():
                 output = output * self.y_std + self.y_mean
                 
         return output
+    
+    def get_input_shape(self) -> List[int]:
+        """
+        Get the expected input shape for this model.
+        
+        Returns:
+            List representing the input shape [batch_size, input_features]
+        """
+        return [None, self.batch_norm.num_features]
+    
+    def get_output_shape(self) -> List[int]:
+        """
+        Get the expected output shape for this model.
+        
+        Returns:
+            List representing the output shape [batch_size, output_features]
+        """
+        return [None, self.linear.out_features]
+
+
 
 # %%
-# Create and train the model
-model = LinearRegressionModel()
+# Create tensors for features and target
+X = torch.tensor(ue1_df[['CQI', 'DRB.UEThpDl']].values, dtype=torch.float32)
+y = torch.tensor(ue1_df['min_prb_ratio'].values, dtype=torch.float32).reshape(-1, 1)
+
+# Create and train the model using the locally defined model class
+model = LinearRegressionModel(input_features=2, output_features=1)
 model.y_mean = y.mean(dim=0, keepdim=True)
 model.y_std = y.std(dim=0, keepdim=True)
+
+device = 'cpu' # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 X.to(device)
 y.to(device)
@@ -275,14 +329,232 @@ for epoch in range(num_epochs):
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
 # %% 
-# convert to onnx and save with versioning
-import torch.onnx
-import datetime
-import json
-import onnx
+# Define some helper functions for model export and inference
+def export_model_to_onnx(
+    model: torch.nn.Module, 
+    file_path: str, 
+    input_shape: Optional[List[int]] = None,
+    input_names: List[str] = ["input"], 
+    output_names: List[str] = ["output"],
+    dynamic_axes: Optional[Dict[str, Dict[int, str]]] = None
+) -> str:
+    """
+    Export PyTorch model to ONNX format with configurable parameters.
+    
+    Args:
+        model: PyTorch model to export
+        file_path: Path where the ONNX model will be saved
+        input_shape: Shape of the dummy input (default: [1, 2])
+        input_names: Names for the input tensors (default: ["input"])
+        output_names: Names for the output tensors (default: ["output"])
+        dynamic_axes: Dictionary specifying dynamic axes (default: batch_size is dynamic)
+        
+    Returns:
+        Path to the exported ONNX model
+    """
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+    
+    # Use default input shape if not provided
+    if input_shape is None:
+        if hasattr(model, 'get_input_shape'):
+            # Try to get shape from model if it has the method
+            shape = model.get_input_shape()
+            # Replace None with 1 for batch dimension
+            input_shape = [1 if dim is None else dim for dim in shape]
+        else:
+            # Default to [1, 2] for LinearRegressionModel
+            input_shape = [1, 2]
+    
+    # Create dummy input with the specified shape
+    dummy_input = torch.randn(*input_shape)
+    
+    # Set up dynamic axes if not provided
+    if dynamic_axes is None:
+        dynamic_axes = {
+            "input": {0: "batch_size"}, 
+            "output": {0: "batch_size"}
+        }
+    
+    # Set model to inference mode
+    model.eval()
+    
+    # Export the model to ONNX format
+    torch.onnx.export(
+        model,
+        dummy_input,
+        file_path,
+        verbose=False,
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=dynamic_axes
+    )
+    
+    return file_path
 
-# Set the model to inference mode
-model.eval()
+def get_default_metadata(
+    model_name: Optional[str] = None, 
+    version: Optional[str] = None, 
+    description: Optional[str] = None,
+    input_features: Optional[List[str]] = None,
+    output_features: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Create default metadata for a model with configurable fields.
+    
+    Args:
+        model_name: Optional name of the model
+        version: Optional version string
+        description: Optional description of the model
+        input_features: Optional list of input feature names
+        output_features: Optional list of output feature names
+        
+    Returns:
+        Dictionary with model metadata
+    """
+    # Default input and output features if not provided
+    if input_features is None:
+        input_features = ["CQI", "DRB.UEThpDl"]
+    
+    if output_features is None:
+        output_features = ["min_prb_ratio"]
+    
+    metadata = {
+        'description': description or 'Linear regression model for PRB prediction based on CQI and throughput',
+        'training_date': datetime.datetime.now().isoformat(),
+        'input_features': json.dumps(input_features),
+        'output_features': json.dumps(output_features),
+        'framework': f'PyTorch {torch.__version__}'
+    }
+    
+    # Add optional fields if provided
+    if model_name:
+        metadata['model_name'] = model_name
+    
+    if version:
+        metadata['version'] = version
+        
+    return metadata
+
+def create_onnx_session(model_path: str) -> ort.InferenceSession:
+    """
+    Create an ONNX inference session with version compatibility handling.
+    
+    Args:
+        model_path: Path to the ONNX model file
+        
+    Returns:
+        ONNX runtime inference session
+    """
+    session_options = ort.SessionOptions()
+    providers = ['CPUExecutionProvider']
+    
+    try:
+        # For newer versions of ONNX Runtime, providers parameter is a keyword arg
+        return ort.InferenceSession(model_path, providers=providers, sess_options=session_options)
+    except TypeError:
+        # Fallback for older versions of ONNX Runtime where providers was a positional arg
+        return ort.InferenceSession(model_path, session_options, providers)
+
+def format_input_tensor(tensor: np.ndarray, input_shape: Optional[List[Optional[int]]]) -> np.ndarray:
+    """
+    Format input tensor to match expected model input shape.
+    
+    Args:
+        tensor: Input tensor as numpy array
+        input_shape: Expected input shape from model
+        
+    Returns:
+        Properly formatted tensor
+    """
+    # If no shape provided or shape is all None, do minimal formatting
+    if input_shape is None or all(dim is None for dim in input_shape):
+        # Handle reshaping if needed (e.g., if tensor is 1D, make it 2D)
+        if len(tensor.shape) == 1:
+            return tensor.reshape(1, -1)
+        return tensor
+    
+    # For 2D inputs like [batch_size, features], ensure input has the right shape
+    if len(input_shape) == 2 and len(tensor.shape) == 1:
+        # Convert [x] to [[x]] - reshape 1D to 2D (with batch size 1)
+        return tensor.reshape(1, -1)
+    
+    # Add batch dimension if needed
+    if len(input_shape) > len(tensor.shape):
+        # If tensor dimensions are fewer than model expects, add batch dimension
+        return tensor.reshape(1, *tensor.shape)
+    
+    return tensor
+
+def run_prediction(
+    model_path_or_session: Union[str, bytes, ort.InferenceSession], 
+    input_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Run inference with an ONNX model.
+    
+    Args:
+        model_path_or_session: Path to the ONNX model file, bytes of model, or InferenceSession
+        input_data: Input data for the model
+        
+    Returns:
+        Prediction results
+    """
+    # Create session if needed
+    if isinstance(model_path_or_session, str):
+        session = create_onnx_session(model_path_or_session)
+    elif isinstance(model_path_or_session, bytes):
+        # Create session from buffer (not used in this script but included for compatibility)
+        session_options = ort.SessionOptions()
+        providers = ['CPUExecutionProvider']
+        try:
+            session = ort.InferenceSession(model_path_or_session, providers=providers, sess_options=session_options)
+        except TypeError:
+            session = ort.InferenceSession(model_path_or_session, session_options, providers)
+    else:
+        session = model_path_or_session
+    
+    # Get input and output names
+    input_names = [input.name for input in session.get_inputs()]
+    output_names = [output.name for output in session.get_outputs()]
+    
+    # Prepare input tensors
+    input_tensors = {}
+    for name in input_names:
+        if name in input_data:
+            # Convert input data to numpy array with explicit float32 type
+            # This ensures compatibility with models expecting float32 tensors
+            tensor = np.array(input_data[name], dtype=np.float32)
+            
+            # Get expected shape from input definition
+            input_shape = None
+            for model_input in session.get_inputs():
+                if model_input.name == name:
+                    input_shape = model_input.shape
+                    break
+            
+            # Format tensor using helper function
+            tensor = format_input_tensor(tensor, input_shape)
+            
+            input_tensors[name] = tensor
+        else:
+            raise ValueError(f"Input {name} not found in request data")
+    
+    # Run inference
+    outputs = session.run(output_names, input_tensors)
+    
+    # Format results
+    result = {}
+    for i, name in enumerate(output_names):
+        # Convert numpy arrays to lists for JSON serialization
+        if isinstance(outputs[i], np.ndarray):
+            result[name] = outputs[i].tolist()
+        else:
+            result[name] = outputs[i]
+    
+    return result
+
+# %%
 
 # Model name and version info
 model_name = "linear_regression_model"
@@ -293,44 +565,38 @@ with torch.no_grad():
     y_pred = model(X)
     loss = criterion(y_pred, (y - model.y_mean) / model.y_std).item()
 
-# Metadata to include with the model
-metadata_props = {
-    "version": model_version,
-    "training_date": datetime.datetime.now().isoformat(),
-    "framework": f"PyTorch {torch.__version__}",
-    "dataset": "network_metrics_exp_1741030459",
-    "metrics": json.dumps({"mse": loss}),
-    "description": "Linear regression model for PRB prediction based on CQI and throughput",
-    "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
-    "output_features": json.dumps(["min_prb_ratio"])
-}
+# Get default metadata and enhance it with additional information
+metadata_props = get_default_metadata(
+    model_name=model_name,
+    version=model_version,
+    description="Linear regression model for PRB prediction based on CQI and throughput",
+    input_features=["CQI", "DRB.UEThpDl"],
+    output_features=["min_prb_ratio"]
+)
 
-# PyTorch needs to trace the operations inside the model to generate the computational graph
-dummy_input = torch.randn(1, 2)  # Example dummy input for export
+# Add additional custom metadata
+metadata_props.update({
+    "dataset": "network_metrics_exp_1741030459",
+    "metrics": json.dumps({"mse": loss})
+})
 
 # Use a temp file for export before uploading to model server
 temp_dir = tempfile.mkdtemp()
 temp_model_path = os.path.join(temp_dir, f"{model_name}_v{model_version}.onnx")
 
-# Export the model to ONNX without any embedded metadata
-torch.onnx.export(
-    model, 
-    dummy_input, 
-    temp_model_path, 
-    verbose=True, 
-    input_names=["input"], 
-    output_names=["output"], 
-    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
+# Export the model to ONNX using the locally defined utility function
+export_model_to_onnx(
+    model=model,
+    file_path=temp_model_path,
+    input_names=["input"],
+    output_names=["output"]
 )
-
-# No longer adding metadata directly to the ONNX file
-# It will be sent separately via the API
 
 print(f"ONNX model saved at {temp_model_path} with version {model_version}")
 
 # %%
-# Upload model to model server with versioning
-model_server_url = os.getenv("MODEL_SERVER_URL", "http://model-server:5000")
+# Upload model to model server with versioning - using environment variable
+model_server_url = os.getenv("MODEL_SERVER_URL")
 
 # Send to model server via REST API using the versioned endpoint with metadata
 with open(temp_model_path, 'rb') as f:
@@ -354,7 +620,6 @@ os.rmdir(temp_dir)
 
 # %%
 # Get model from model server using versioning APIs
-import onnxruntime as ort
 
 model_name = "linear_regression_model"
 model_version = "1.0.2"  # Specific version or use "/latest" to get the latest version
@@ -374,8 +639,8 @@ if response.status_code == 200:
     with open(temp_model_path, 'wb') as f:
         f.write(response.content)
     
-    # Load the ONNX model with onnxruntime for inference
-    ort_session = ort.InferenceSession(temp_model_path)
+    # Load the ONNX model with onnxruntime for inference using the locally defined utility function
+    ort_session = create_onnx_session(temp_model_path)
     
     # Get metadata from the metadata endpoint
     metadata_response = requests.get(f'{model_server_url}/models/{model_name}/versions/{model_version}/metadata')
@@ -393,15 +658,18 @@ if response.status_code == 200:
     print(f"Metrics: {metadata.get('metrics', 'unknown')}")
     print(f"Description: {metadata.get('description', 'unknown')}")
     
-    # Test inference with the model
+    # Test inference with the model using the locally defined utility function
     test_input = np.array([[10.0, 100.0]], dtype=np.float32)  # Example CQI and throughput
-    outputs = ort_session.run(
-        None,  # output names, None means return all outputs
-        {"input": test_input}  # input data
+    
+    # Using the run_prediction function
+    prediction_result = run_prediction(
+        ort_session,
+        {"input": test_input}
     )
+    
     print(f"\nTest inference:")
     print(f"Input (CQI, Throughput): {test_input}")
-    print(f"Predicted min_prb_ratio: {outputs[0]}")
+    print(f"Predicted min_prb_ratio: {prediction_result['output']}")
     
     # Cleanup
     del ort_session
@@ -411,9 +679,6 @@ if response.status_code == 200:
     print("\nModel successfully loaded from model server")
 else:
     print(f"Error downloading model: {response.text}")
-
-
-
 
 # %%
 # look at the hyperplane fit
