@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run tests for the inference server in the Docker container using the test-specific compose file
+# Run tests for both model-server and inference-server using the test-specific compose file
 
-echo "===== Starting test run with clean slate ====="
+echo "===== Starting full test suite with clean slate ====="
 
 # Stop existing test containers if any
 echo "Stopping test containers if running..."
@@ -15,16 +15,20 @@ sudo docker volume rm aiml-model-data-test aiml-model-db-test aiml-inference-cac
 echo "Starting test containers..."
 sudo docker compose -f docker-compose.test.yml up -d model-server inference-server
 
-# Wait for them to be ready
+# Wait for services to be ready
 echo "Waiting for services to be ready..."
 sleep 5
 
-# Create test models
+# Create test models for inference server tests
 echo "Creating test models..."
 sudo docker compose -f docker-compose.test.yml exec model-server python create_test_models.py
 
-# Run tests
-echo "Running tests..."
+# Run model-server tests
+echo "===== Running model-server tests ====="
+sudo docker compose -f docker-compose.test.yml exec model-server pytest -xvs /app/tests/
+
+# Run inference-server tests
+echo "===== Running inference-server tests ====="
 sudo docker compose -f docker-compose.test.yml exec inference-server pytest -xvs /app/tests/
 
 # Clean up models via API
@@ -36,4 +40,4 @@ sudo docker compose -f docker-compose.test.yml exec model-server curl -s -X DELE
 echo "Stopping test containers..."
 sudo docker compose -f docker-compose.test.yml down
 
-echo "Test run complete!"
+echo "All tests complete!"

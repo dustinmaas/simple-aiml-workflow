@@ -1,0 +1,114 @@
+services:
+  # InfluxDB - Time series database for network metrics
+  influxdb:
+    container_name: metrics_influxdb_test
+    hostname: metrics_influxdb
+    image: influxdb:2.7.1
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
+    volumes:
+      - influxdb-data-test:/var/lib/influxdb2
+    networks:
+      - ai-ml-test-network
+      - oran-sc-ric_ric_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+      start_period: 10s
+
+  # Model Server - Stores and serves PyTorch models
+  model-server:
+    build: ./model-server
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./model-server:/app
+      - model-data-test:/data/models
+      - model-db-test:/data/db
+    environment:
+      - MODEL_STORAGE_DIR=${MODEL_STORAGE_DIR:-/data/models}
+      - MODEL_DB_PATH=${MODEL_DB_PATH:-/data/db/models.db}
+    networks:
+      - ai-ml-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Inference Server - Provides inference API for models
+  inference-server:
+    build: ./inference-server
+    ports:
+      - "5002:5000"
+    volumes:
+      - ./inference-server:/app
+      - inference-cache-test:/app/cache/models
+    depends_on:
+      - model-server
+    environment:
+      - MODEL_SERVER_URL=${MODEL_SERVER_URL:-http://model-server:5000}
+      - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/cache/models}
+      - MAX_CACHE_SIZE=${MAX_CACHE_SIZE:-10}
+    networks:
+      - ai-ml-test-network
+      - oran-sc-ric_ric_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Analysis and Training Environment - Jupyter Lab for data analysis and model training
+  analysis-and-training:
+    build: ./analysis-and-training
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./analysis-and-training:/app
+    depends_on:
+      - model-server
+      - inference-server
+    environment:
+      - MODEL_SERVER_URL=${MODEL_SERVER_URL:-http://model-server:5000}
+      - INFERENCE_SERVER_URL=${INFERENCE_SERVER_URL:-http://inference-server:5000}
+    env_file:
+      - .env
+    networks:
+      - ai-ml-test-network
+      - oran-sc-ric_ric_network
+    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=${JUPYTER_TOKEN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  ai-ml-test-network:
+    driver: bridge
+  oran-sc-ric_ric_network:
+    external: true
+    name: oran-sc-ric_ric_network
+
+volumes:
+  model-data-test:
+    name: aiml-model-data-test
+  model-db-test:
+    name: aiml-model-db-test
+  influxdb-data-test:
+    name: aiml-influxdb-data-test
+  inference-cache-test:
+    name: aiml-inference-cache-test
