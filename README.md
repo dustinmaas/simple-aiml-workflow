@@ -64,14 +64,58 @@ cd /var/tmp/simple-aiml-workflow/experiment-runner
 Send a POST request to the inference server:
 
 ```bash
-curl -X POST http://localhost:5002/predict/prb \
+curl -X POST http://localhost:5002/inference/models/test_inference_model/latest/predict \
   -H "Content-Type: application/json" \
-  -d '{"cqi": 10, "throughput": 80, "model_id": "torch_linear_regression_v1"}'
+  -d '{"input": [[10.0], [100.0]]}'
 ```
+
+You can also specify a model version:
+
+```bash
+curl -X POST http://localhost:5002/inference/models/test_inference_model/versions/1.0.0/predict \
+  -H "Content-Type: application/json" \
+  -d '{"input": [[10.0], [100.0]]}'
+```
+
+Or use a model UUID:
+
+```bash
+curl -X POST http://localhost:5002/inference/models/uuid/<model-uuid>/predict \
+  -H "Content-Type: application/json" \
+  -d '{"input": [[10.0], [100.0]]}'
+```
+
+Note: The input format is a column vector where each row is a separate input sample. The model expects inputs in the format `[[value1], [value2], ...]`.
 
 ### Running Tests
 
-You can run the end-to-end test script:
+There are several ways to run tests in this project:
+
+#### Component Tests
+
+For running tests on individual components, use the component-specific test scripts:
+
+```bash
+# Run inference-server tests with clean environment
+cd inference-server
+./run_tests.sh
+
+# Run model-server tests directly with pytest
+cd model-server
+sudo docker compose exec model-server pytest -xvs
+```
+
+The `run_tests.sh` script provides a comprehensive testing workflow that:
+1. Stops existing containers
+2. Removes model volumes for a clean slate
+3. Starts containers with fresh volumes
+4. Creates test models using the LinearRegressionModel from playground.py
+5. Runs all tests with detailed output
+6. Cleans up test models when complete
+
+#### End-to-End Tests
+
+You can run the end-to-end test script for workflow validation:
 
 ```bash
 docker-compose run experiment-runner python /app/test_torch_inference.py
@@ -82,3 +126,14 @@ Or modify the Docker Compose configuration to run in test mode automatically:
 ```yaml
 command: python /app/run_experiment.py --mode=test
 ```
+
+#### Test Model Consistency
+
+The testing framework now uses the same LinearRegressionModel from playground.py across all test environments, ensuring consistency between development and testing. This model includes:
+
+- Batch normalization on input features
+- Linear regression layer with appropriate dimensions
+- Mean and standard deviation normalization on outputs
+- Dynamic input shape detection to adapt to different model configurations
+
+This approach ensures that all components work with the same model architecture, providing more reliable test results.

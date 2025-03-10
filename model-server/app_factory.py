@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from routes.health import health_bp
 from routes.model_routes import model_bp
+from utils.constants import MODEL_DB_PATH, MODEL_STORAGE_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -46,8 +47,11 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
     
-    # Ensure the models directory exists
-    os.makedirs(app.config['MODELS_DIR'], exist_ok=True)
+    # Ensure the directories exist
+    # Make sure storage directory for model files exists
+    os.makedirs(MODEL_STORAGE_DIR, exist_ok=True)
+    # Make sure database directory exists
+    os.makedirs(os.path.dirname(MODEL_DB_PATH), exist_ok=True)
     
     # Register blueprints
     app.register_blueprint(health_bp)
@@ -57,7 +61,8 @@ def create_app(test_config=None):
     register_error_handlers(app)
     
     # Log that the app was initialized
-    logger.info(f"Initialized model server with models directory: {app.config['MODELS_DIR']}")
+    logger.info(f"Initialized model server with UUID storage at: {MODEL_STORAGE_DIR}")
+    logger.info(f"Model database at: {MODEL_DB_PATH}")
     
     return app
 

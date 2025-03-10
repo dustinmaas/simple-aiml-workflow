@@ -1,10 +1,14 @@
 openapi: 3.0.3
 info:
   title: Inference Server API
-  description: API for making predictions with versioned ONNX models
+  description: |
+    API for making predictions with ONNX models retrieved from the Model Server.
+    
+    The API now supports dynamic model input shape detection to adapt to different model structures, 
+    with special handling for single-feature models requiring column vector format.
   version: 0.1.0
 servers:
-  - url: http://localhost:5000
+  - url: http://localhost:5002
     description: Local development
 paths:
   /health:
@@ -23,38 +27,60 @@ paths:
                   status:
                     type: string
                     example: healthy
-  /predict:
+                  server:
+                    type: string
+                    example: inference
+                  timestamp:
+                    type: number
+                    format: float
+                    example: 1622548800.123456
+
+  /inference/models/{model_name}/versions/{version}/predict:
     post:
-      summary: Make predictions
-      description: Make predictions using versioned models
-      operationId: predict
+      summary: Make a prediction with a specific model version
+      description: |
+        Runs inference using a specific version of a model with the provided input data.
+        
+        For single-feature models, use column vector format: {"input": [[10.0], [100.0]]}
+      operationId: predictByNameVersion
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0)
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - features
-              properties:
-                features:
-                  type: array
-                  items:
-                    oneOf:
-                      - type: number
-                      - type: array
-                        items:
-                          type: number
-                  description: Input features for model prediction (single instance or batch)
-                  example: [[10.0, 100.0], [8.0, 80.0]]
-                model_name:
-                  type: string
-                  description: Name of the model to use
-                  example: linear_regression_model
-                model_version:
-                  type: string
-                  description: Version of the model to use (defaults to 'latest')
-                  example: 1.0.0
+              additionalProperties: true
+              description: Input data for the model (structure depends on the model)
+            examples:
+              singleFeatureModel:
+                summary: Input for a single-feature model (column vector format)
+                value:
+                  input: [[10.0], [100.0]]
+                description: Column vector format for single-feature models, where each inner array represents one sample
+              multiFeatureModel:
+                summary: Input for a multi-feature model
+                value:
+                  input: [[1.0, 2.0], [3.0, 4.0]]
+                description: Input for models with multiple features per sample
+              complexModel:
+                summary: Complex input with multiple tensors
+                value:
+                  input1: [1.0, 2.0, 3.0, 4.0]
+                  input2: [[5.0, 6.0], [7.0, 8.0]]
+                description: For models expecting multiple named input tensors
       responses:
         '200':
           description: Prediction results
@@ -63,20 +89,32 @@ paths:
               schema:
                 type: object
                 properties:
-                  predictions:
-                    type: array
-                    items:
-                      oneOf:
-                        - type: number
-                        - type: array
-                          items:
-                            type: number
-                    description: Model prediction results
-                    example: [[70.22], [72.95]]
-                  model:
-                    $ref: '#/components/schemas/ModelInfo'
+                  model_name:
+                    type: string
+                    example: regression_model
+                  model_version:
+                    type: string
+                    example: 1.0.0
+                  prediction:
+                    type: object
+                    additionalProperties: true
+                    description: Prediction results (structure depends on the model)
+                    example:
+                      output: [[20.0], [200.0]]
+                  processing_time_seconds:
+                    type: number
+                    format: float
+                    example: 0.0123
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Model not found
           content:
             application/json:
               schema:
@@ -87,11 +125,185 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  /models:
+                
+  /inference/models/{model_name}/latest/predict:
+    post:
+      summary: Make a prediction with the latest model version
+      description: |
+        Runs inference using the latest version of a model with the provided input data.
+        
+        For single-feature models, use column vector format: {"input": [[10.0], [100.0]]}
+      operationId: predictLatestVersion
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Input data for the model (structure depends on the model)
+            examples:
+              singleFeatureModel:
+                summary: Input for a single-feature model (column vector format)
+                value:
+                  input: [[10.0], [100.0]]
+                description: Column vector format for single-feature models, where each inner array represents one sample
+              multiFeatureModel:
+                summary: Input for a multi-feature model
+                value:
+                  input: [[1.0, 2.0], [3.0, 4.0]]
+                description: Input for models with multiple features per sample
+              complexModel:
+                summary: Complex input with multiple tensors
+                value:
+                  input1: [1.0, 2.0, 3.0, 4.0]
+                  input2: [[5.0, 6.0], [7.0, 8.0]]
+                description: For models expecting multiple named input tensors
+      responses:
+        '200':
+          description: Prediction results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_name:
+                    type: string
+                    example: regression_model
+                  model_version:
+                    type: string
+                    example: 1.0.0
+                  prediction:
+                    type: object
+                    additionalProperties: true
+                    description: Prediction results (structure depends on the model)
+                    example:
+                      output: [[20.0], [200.0]]
+                  processing_time_seconds:
+                    type: number
+                    format: float
+                    example: 0.0123
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /inference/models/uuid/{uuid}/predict:
+    post:
+      summary: Make a prediction with a model by UUID
+      description: |
+        Runs inference using a model specified by UUID with the provided input data.
+        
+        For single-feature models, use column vector format: {"input": [[10.0], [100.0]]}
+      operationId: predictByUuid
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID of the model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Input data for the model (structure depends on the model)
+            examples:
+              singleFeatureModel:
+                summary: Input for a single-feature model (column vector format)
+                value:
+                  input: [[10.0], [100.0]]
+                description: Column vector format for single-feature models, where each inner array represents one sample
+              multiFeatureModel:
+                summary: Input for a multi-feature model
+                value:
+                  input: [[1.0, 2.0], [3.0, 4.0]]
+                description: Input for models with multiple features per sample
+              complexModel:
+                summary: Complex input with multiple tensors
+                value:
+                  input1: [1.0, 2.0, 3.0, 4.0]
+                  input2: [[5.0, 6.0], [7.0, 8.0]]
+                description: For models expecting multiple named input tensors
+      responses:
+        '200':
+          description: Prediction results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_uuid:
+                    type: string
+                    example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                  model_name:
+                    type: string
+                    example: regression_model
+                  model_version:
+                    type: string
+                    example: 1.0.0
+                  prediction:
+                    type: object
+                    additionalProperties: true
+                    description: Prediction results (structure depends on the model)
+                    example:
+                      output: [[20.0], [200.0]]
+                  processing_time_seconds:
+                    type: number
+                    format: float
+                    example: 0.0123
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /inference/models/list:
     get:
       summary: List available models
       description: Returns a list of all available models from the model server
-      operationId: listModels
+      operationId: listAvailableModels
       responses:
         '200':
           description: List of models
@@ -106,51 +318,40 @@ paths:
                 example:
                   linear_regression_model:
                     - filename: linear_regression_model_v1.0.0.onnx
-                      path: /app/models/linear_regression_model_v1.0.0.onnx
+                      path: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
                       version: 1.0.0
-                    - filename: linear_regression_model_v1.0.1.onnx
-                      path: /app/models/linear_regression_model_v1.0.1.onnx
-                      version: 1.0.1
+                      uuid: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
+                    - filename: linear_regression_model_v1.1.0.onnx
+                      path: /data/models/a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5.onnx
+                      version: 1.1.0
+                      uuid: a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
         '500':
           description: Internal server error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-  
-  /models/{model_name}/versions:
-    get:
-      summary: List model versions
-      description: Returns a list of all available versions for a specific model
-      operationId: listModelVersions
-      parameters:
-        - name: model_name
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Name of the model
+                
+  /inference/cache/clear:
+    post:
+      summary: Clear model cache
+      description: Clears the local model cache to free up disk space and ensure latest models are fetched
+      operationId: clearModelCache
       responses:
         '200':
-          description: List of model versions
+          description: Cache cleared successfully
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  model:
+                  message:
                     type: string
-                    example: linear_regression_model
-                  versions:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ModelVersion'
-        '404':
-          description: Model not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+                    example: Model cache cleared successfully
         '500':
           description: Internal server error
           content:
@@ -165,43 +366,63 @@ components:
       properties:
         error:
           type: string
-          example: Model not found or error making prediction
+          example: Model not found
 
     ModelVersion:
       type: object
       properties:
+        uuid:
+          type: string
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
         filename:
           type: string
           example: linear_regression_model_v1.0.0.onnx
         path:
           type: string
-          example: /app/models/linear_regression_model_v1.0.0.onnx
+          example: /data/models/a1b2c3d4-e5f6-7890-abcd-ef1234567890.onnx
         version:
           type: string
           example: 1.0.0
+        size_bytes:
+          type: integer
+          example: 123456
+        created:
+          type: string
+          format: date-time
+          example: 2025-03-09T06:37:00.258110
 
-    ModelInfo:
-      type: object
-      properties:
-        name:
-          type: string
-          example: linear_regression_model
-        version:
-          type: string
-          example: 1.0.0
-        metadata:
-          $ref: '#/components/schemas/Metadata'
-    
     Metadata:
       type: object
       properties:
+        version:
+          type: string
+          example: 1.0.0
         training_date:
           type: string
           format: date-time
           example: 2025-03-09T06:37:00.258110
-        description:
+        framework:
           type: string
-          example: Linear regression model for PRB prediction based on CQI and throughput
+          example: PyTorch 2.1.0+cpu
+        dataset:
+          type: string
+          example: network_metrics_exp_1741030459
         metrics:
           type: string
           example: '{"mse": 5336.25537109375}'
+        description:
+          type: string
+          example: Linear regression model for PRB prediction based on CQI and throughput
+        input_features:
+          type: string
+          example: '["CQI", "DRB.UEThpDl"]'
+        output_features:
+          type: string
+          example: '["min_prb_ratio"]'
+        upload_time:
+          type: string
+          format: date-time
+          example: 2025-03-09T06:37:00.300000
+        model_name:
+          type: string
+          example: linear_regression_model

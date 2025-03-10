@@ -13,7 +13,10 @@ import onnxruntime as ort
 from typing import Dict, Any, Tuple, Optional, List
 import numpy as np
 
-from utils.constants import MODEL_SERVER_REQUEST_TIMEOUT, MAX_CACHE_SIZE, CACHE_EXPIRY_SECONDS
+from utils.constants import REQUEST_TIMEOUT, MAX_CACHE_SIZE
+
+# Default cache expiry in seconds (1 hour)
+CACHE_EXPIRY_SECONDS = 3600
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,7 @@ class ModelCache:
                 url = f"{self.model_server_url}/models/{model_name}/versions/{version}"
             
             logger.info(f"Fetching model from {url}")
-            response = requests.get(url, timeout=MODEL_SERVER_REQUEST_TIMEOUT)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             
             # Create a temporary file for the model
@@ -149,7 +152,7 @@ class ModelCache:
             url = f"{self.model_server_url}/models/{model_name}/versions/{version_str}/metadata"
             
             logger.info(f"Fetching metadata from {url}")
-            response = requests.get(url, timeout=MODEL_SERVER_REQUEST_TIMEOUT)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             
             return response.json()

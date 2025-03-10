@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Main application module for the inference server.
+Inference Server API for ONNX models.
 
-This module initializes and runs the Flask application.
+This API provides inference endpoints for ONNX models retrieved from the model server.
+It implements the UUID extraction pattern to handle potential UUID mismatches between
+database UUIDs and storage UUIDs.
 """
 
 import os

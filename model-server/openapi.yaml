@@ -1,7 +1,12 @@
 openapi: 3.0.3
 info:
   title: Model Server API
-  description: API for managing and retrieving versioned ONNX models with metadata
+  description: |
+    API for managing and retrieving versioned ONNX models with metadata.
+    
+    The model server implements a UUID management pattern that ensures reliable
+    model retrieval even in cases where there might be a mismatch between database UUIDs
+    and storage file UUIDs.
   version: 0.1.0
 servers:
   - url: http://localhost:5000
@@ -42,11 +47,17 @@ paths:
                 example:
                   linear_regression_model:
                     - filename: linear_regression_model_v1.0.0.onnx
-                      path: /app/models/linear_regression_model_v1.0.0.onnx
+                      path: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
                       version: 1.0.0
-                    - filename: linear_regression_model_v1.0.1.onnx
-                      path: /app/models/linear_regression_model_v1.0.1.onnx
-                      version: 1.0.1
+                      uuid: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
+                    - filename: linear_regression_model_v1.1.0.onnx
+                      path: /data/models/a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5.onnx
+                      version: 1.1.0
+                      uuid: a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
         '500':
           description: Internal server error
           content:
@@ -81,6 +92,21 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/ModelVersion'
+                example:
+                  model: linear_regression_model
+                  versions:
+                    - filename: linear_regression_model_v1.0.0.onnx
+                      path: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
+                      version: 1.0.0
+                      uuid: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
+                    - filename: linear_regression_model_v1.1.0.onnx
+                      path: /data/models/a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5.onnx
+                      version: 1.1.0
+                      uuid: a73fddb6-874e-4d2f-a2c2-a0b2fe3216e5
+                      size_bytes: 145
+                      created: 2025-03-10T00:18:09
         '404':
           description: Model not found
           content:
@@ -134,7 +160,11 @@ paths:
                 $ref: '#/components/schemas/Error'
     post:
       summary: Upload model version
-      description: Upload and store a specific version of a model with metadata
+      description: |
+        Upload and store a specific version of a model with metadata.
+        
+        For column vector models (single-feature models), ensure the input_features 
+        and output_features metadata are properly defined.
       operationId: uploadModelVersion
       parameters:
         - name: model_name
@@ -164,6 +194,16 @@ paths:
                   type: string
                   format: json
                   description: JSON metadata for the model
+              example:
+                model: binary-content
+                metadata: |
+                  {
+                    "description": "Linear regression model for PRB prediction based on CQI and throughput",
+                    "training_date": "2025-03-09T06:37:00.258110",
+                    "input_features": ["CQI", "DRB.UEThpDl"],
+                    "output_features": ["min_prb_ratio"],
+                    "framework": "PyTorch 2.1.0+cpu"
+                  }
       responses:
         '200':
           description: Model uploaded successfully
@@ -178,8 +218,14 @@ paths:
                   message:
                     type: string
                     example: Model linear_regression_model version 1.0.0 uploaded successfully
-                  model:
-                    $ref: '#/components/schemas/ModelInfo'
+                  uuid:
+                    type: string
+                    description: UUID assigned to the model
+                    example: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                  size:
+                    type: integer
+                    description: Size of the model in bytes
+                    example: 145
         '400':
           description: Invalid request
           content:
@@ -309,6 +355,231 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+                
+  /models/uuid/{uuid}:
+    get:
+      summary: Get model by UUID
+      description: Retrieves a model using its UUID directly
+      operationId: getModelByUuid
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID of the model
+      responses:
+        '200':
+          description: Model file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete model by UUID
+      description: Delete a model using its UUID directly
+      operationId: deleteModelByUuid
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID of the model
+      responses:
+        '200':
+          description: Model deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Model with UUID abc123 deleted successfully
+                  model_name:
+                    type: string
+                    example: linear_regression_model
+                  version:
+                    type: string
+                    example: 1.0.0
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /models/uuid/{uuid}/metadata:
+    get:
+      summary: Get model metadata by UUID
+      description: Retrieves metadata for a model using its UUID
+      operationId: getModelMetadataByUuid
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID of the model
+      responses:
+        '200':
+          description: Model metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+        '404':
+          description: Metadata not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /models/uuid/{uuid}/detail:
+    get:
+      summary: Get detailed model information by UUID
+      description: Retrieves detailed information about a model using its UUID
+      operationId: getModelDetailByUuid
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID of the model
+      responses:
+        '200':
+          description: Detailed model information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_name:
+                    type: string
+                    example: linear_regression_model
+                  version:
+                    type: string
+                    example: 1.0.0
+                  uuid:
+                    type: string
+                    example: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                  filename:
+                    type: string
+                    example: linear_regression_model_v1.0.0.onnx
+                  path:
+                    type: string
+                    example: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
+                  size_bytes:
+                    type: integer
+                    example: 145
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: 2025-03-10T00:18:09
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
+        '404':
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
+  /models/{model_name}/versions/{version}/detail:
+    get:
+      summary: Get detailed model information
+      description: Retrieves detailed information about a specific version of a model
+      operationId: getModelDetail
+      parameters:
+        - name: model_name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the model
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Version of the model (e.g., 1.0.0)
+      responses:
+        '200':
+          description: Detailed model information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model_name:
+                    type: string
+                    example: linear_regression_model
+                  version:
+                    type: string
+                    example: 1.0.0
+                  uuid:
+                    type: string
+                    example: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
+                  filename:
+                    type: string
+                    example: linear_regression_model_v1.0.0.onnx
+                  path:
+                    type: string
+                    example: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
+                  size_bytes:
+                    type: integer
+                    example: 145
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: 2025-03-10T00:18:09
+                  metadata:
+                    $ref: '#/components/schemas/Metadata'
+        '404':
+          description: Model version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
 components:
   schemas:
@@ -322,15 +593,25 @@ components:
     ModelVersion:
       type: object
       properties:
+        uuid:
+          type: string
+          example: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
         filename:
           type: string
           example: linear_regression_model_v1.0.0.onnx
         path:
           type: string
-          example: /app/models/linear_regression_model_v1.0.0.onnx
+          example: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
         version:
           type: string
           example: 1.0.0
+        size_bytes:
+          type: integer
+          example: 145
+        created:
+          type: string
+          format: date-time
+          example: 2025-03-10T00:18:09
 
     ModelInfo:
       type: object
@@ -343,7 +624,10 @@ components:
           example: 1.0.0
         path:
           type: string
-          example: /app/models/linear_regression_model_v1.0.0.onnx
+          example: /data/models/5ba4ee56-e1bb-402c-b22b-50b7e7d261c3.onnx
+        uuid:
+          type: string
+          example: 5ba4ee56-e1bb-402c-b22b-50b7e7d261c3
         metadata:
           $ref: '#/components/schemas/Metadata'
 

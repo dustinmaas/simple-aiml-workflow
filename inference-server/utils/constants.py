@@ -7,21 +7,17 @@ This module defines constants used throughout the inference server.
 
 import os
 
-# Default model server URL
+# Model server URL for retrieving models
 MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://model-server:5000')
 
-# Default model name to use when none is specified
-DEFAULT_MODEL_NAME = 'linear_regression_model'
+# Local cache directory for models
+MODEL_CACHE_DIR = os.environ.get('MODEL_CACHE_DIR', '/app/cache/models')
 
-# Default version to use when none is specified
-DEFAULT_MODEL_VERSION = 'latest'
+# Maximum content length for requests (10 MB)
+MAX_CONTENT_LENGTH = 10 * 1024 * 1024
 
-# Maximum content length for uploads (50 MB)
-MAX_CONTENT_LENGTH = 50 * 1024 * 1024
+# Default request timeout for model server requests (in seconds)
+REQUEST_TIMEOUT = 30
 
-# Request timeout for model server communication (in seconds)
-MODEL_SERVER_REQUEST_TIMEOUT = 30
-
-# Cache configuration
-MAX_CACHE_SIZE = 10  # Maximum number of models to keep in cache
-CACHE_EXPIRY_SECONDS = 3600  # Time in seconds after which a cached model is refreshed
+# Maximum cache size (number of models)
+MAX_CACHE_SIZE = int(os.environ.get('MAX_CACHE_SIZE', '10'))

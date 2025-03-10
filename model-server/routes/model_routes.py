@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Model management routes for the model server.
+Model management routes using UUID-based storage.
 
-This module defines routes for model management operations, including:
+This module defines routes for model management operations including:
 - Listing available models and versions
 - Retrieving specific model versions
 - Uploading new models and versions
@@ -12,49 +12,49 @@ This module defines routes for model management operations, including:
 import os
 import logging
 import json
-from typing import Dict, Any
-from flask import Blueprint, request, jsonify, send_file
-from werkzeug.utils import secure_filename
+import uuid
+from typing import Dict, Any, List, Optional
+from flask import Blueprint, request, jsonify, send_file, current_app
+import io
 
-from utils.constants import MODELS_DIR
-from utils.version_manager import (
-    get_model_versions,
-    get_latest_version,
-    group_models_by_name,
-    version_to_string,
-    get_next_version
-)
-from utils.metadata_manager import (
-    save_metadata,
-    load_metadata,
-    clean_metadata,
-    merge_metadata,
-    enriched_metadata_response
-)
-from utils.model_validator import (
-    validate_onnx_model,
-    get_model_summary
-)
+from utils.constants import MODEL_DB_PATH, MODEL_STORAGE_DIR
+from utils.database import ModelDatabase
+from utils.storage import ModelStorage
+from utils.model_validator import validate_onnx_model, get_model_summary
 
 logger = logging.getLogger(__name__)
 
 # Create Blueprint for model routes
 model_bp = Blueprint('models', __name__, url_prefix='/models')
 
-# Ensure models directory exists
-os.makedirs(MODELS_DIR, exist_ok=True)
+# Initialize database and storage
+db = ModelDatabase(MODEL_DB_PATH)
+storage = ModelStorage(MODEL_STORAGE_DIR)
 
 @model_bp.route('', methods=['GET'])
 def list_models():
     """
     List all available models grouped by name with versions.
-    
+
     Returns:
         JSON response with all models and their versions
     """
     try:
-        grouped_models = group_models_by_name(MODELS_DIR)
-        return jsonify(grouped_models)
+        grouped_models = db.list_models()
+        
+        # Format the response to match the existing API structure
+        result = {}
+        for name, versions in grouped_models.items():
+            result[name] = []
+            for model in versions:
+                result[name].append({
+                    'uuid': model['uuid'],
+                    'version': model['version'],
+                    'path': model['file_path'],
+                    'filename': f"{name}_v{model['version']}.onnx"
+                })
+        
+        return jsonify(result)
     except Exception as e:
         logger.error(f"Error listing models: {e}")
         return jsonify({"error": str(e)}), 500
@@ -63,7 +63,7 @@ def list_models():
 def list_model_versions(model_name):
     """
     List all versions of a specific model.
-    
+
     Args:
         model_name: Base name of the model
         
@@ -71,53 +71,39 @@ def list_model_versions(model_name):
         JSON response with all versions of the model
     """
     try:
-        model_versions = get_model_versions(model_name, MODELS_DIR)
-        versions = []
+        grouped_models = db.list_models()
         
-        for filename, version_tuple in model_versions:
-            version_str = version_to_string(version_tuple)
-            filepath = os.path.join(MODELS_DIR, filename)
+        if model_name not in grouped_models:
+            return jsonify({"error": f"Model {model_name} not found"}), 404
+        
+        # Format the response to include detailed version info
+        versions = []
+        for model in grouped_models[model_name]:
             versions.append({
-                "version": version_str,
-                "filename": filename,
-                "path": filepath,
-                "size_bytes": os.path.getsize(filepath),
-                "created": os.path.getctime(filepath)
+                'uuid': model['uuid'],
+                'version': model['version'],
+                'path': model['file_path'],
+                'filename': f"{model_name}_v{model['version']}.onnx",
+                'size_bytes': model['file_size'],
+                'created': model['created_at']
             })
-            
-        return jsonify({"model": model_name, "versions": versions})
+        
+        # Sort versions by creation time, newest first
+        versions.sort(key=lambda x: x['created'], reverse=True)
+        
+        return jsonify({
+            "model": model_name,
+            "versions": versions
+        })
     except Exception as e:
         logger.error(f"Error listing model versions: {e}")
         return jsonify({"error": str(e)}), 500
 
-@model_bp.route('/<model_name>/versions/latest', methods=['GET'])
-def get_latest_model_version(model_name):
-    """
-    Get the latest version of a model.
-    
-    Args:
-        model_name: Base name of the model
-        
-    Returns:
-        The model file as attachment
-    """
-    try:
-        latest_version = get_latest_version(model_name, MODELS_DIR)
-        if not latest_version:
-            return jsonify({"error": f"No versions found for model {model_name}"}), 404
-        
-        filepath = os.path.join(MODELS_DIR, latest_version)
-        
-        return send_file(filepath, as_attachment=True)
-    except Exception as e:
-        logger.error(f"Error getting latest model version: {e}")
-        return jsonify({"error": str(e)}), 500
-
 @model_bp.route('/<model_name>/versions/<version>', methods=['GET'])
-def get_specific_model_version(model_name, version):
+def get_model_by_name_version(model_name, version):
     """
     Get a specific version of a model.
-    
+
     Args:
         model_name: Base name of the model
         version: Specific version to retrieve
@@ -126,59 +112,163 @@ def get_specific_model_version(model_name, version):
         The model file as attachment
     """
     try:
-        # Format the expected filename based on model name and version
-        filename = f"{model_name}_v{version}.onnx"
-        filepath = os.path.join(MODELS_DIR, filename)
-        
-        if not os.path.exists(filepath):
+        model_info = db.get_model_by_name_version(model_name, version)
+        if not model_info:
             return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
-        
-        return send_file(filepath, as_attachment=True)
+
+        # Extract the storage UUID from the file path
+        # Format of file_path is: "/data/models/[storage_uuid].onnx"
+        file_path = model_info["file_path"]
+        try:
+            storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+            logger.info(f"Database UUID: {model_info['uuid']}, Storage UUID: {storage_uuid}")
+        except Exception as e:
+            logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+            storage_uuid = model_info["uuid"]  # Fallback to database UUID
+
+        model_data = storage.get_model(storage_uuid)
+        if not model_data:
+            return jsonify({"error": f"Model file not found for {model_name} version {version}"}), 404
+
+        filename = f"{model_name}_v{version}.onnx"
+
+        return send_file(
+            io.BytesIO(model_data),
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            attachment_filename=filename
+        )
     except Exception as e:
         logger.error(f"Error getting model version: {e}")
         return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>', methods=['GET'])
-def get_model(model_name):
+def get_model_versions(model_name):
     """
-    Retrieve the latest version of a specific model.
-    
+    Get all versions of a model.
+
     Args:
         model_name: Base name of the model
         
     Returns:
-        The latest model version as attachment
+        JSON response with all versions of the model
     """
-    return get_latest_model_version(model_name)
+    return list_model_versions(model_name)
+
+@model_bp.route('/<model_name>/versions/latest', methods=['GET'])
+def get_latest_model_version(model_name):
+    """
+    Get the latest version of a model.
+
+    Args:
+        model_name: Base name of the model
+        
+    Returns:
+        The model file as attachment
+    """
+    try:
+        model_info = db.get_latest_model_by_name(model_name)
+        if not model_info:
+            return jsonify({"error": f"No versions found for model {model_name}"}), 404
+
+        # Extract the storage UUID from the file path
+        # Format of file_path is: "/data/models/[storage_uuid].onnx"
+        file_path = model_info["file_path"]
+        try:
+            storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+            logger.info(f"Database UUID: {model_info['uuid']}, Storage UUID: {storage_uuid}")
+        except Exception as e:
+            logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+            storage_uuid = model_info["uuid"]  # Fallback to database UUID
+
+        model_data = storage.get_model(storage_uuid)
+        if not model_data:
+            return jsonify({"error": f"Model file not found for {model_name}"}), 404
+
+        filename = f"{model_name}_v{model_info['version']}.onnx"
+
+        return send_file(
+            io.BytesIO(model_data),
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            attachment_filename=filename
+        )
+    except Exception as e:
+        logger.error(f"Error getting latest model version: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>/versions/<version>/metadata', methods=['GET'])
 def get_model_metadata(model_name, version):
     """
     Get metadata for a specific model version.
-    
+
     Args:
         model_name: Base name of the model
-        version: Specific version to retrieve metadata for
+        version: Specific version to get metadata for
         
     Returns:
         JSON response with model metadata
     """
-    filename = f"{model_name}_v{version}.onnx"
-    filepath = os.path.join(MODELS_DIR, filename)
-    
-    if not os.path.exists(filepath):
-        return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
-    
-    metadata = load_metadata(filepath)
-    metadata = enriched_metadata_response(metadata)
-    
-    return jsonify(metadata)
+    try:
+        model_info = db.get_model_by_name_version(model_name, version)
+        if not model_info:
+            return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
+
+        metadata = db.get_metadata(model_info['uuid'])
+        if not metadata:
+            return jsonify({})  # Return empty metadata if none exists
+            
+        # Add upload time in a readable format
+        if 'upload_time' in metadata:
+            try:
+                from datetime import datetime
+                timestamp = datetime.fromisoformat(metadata['upload_time'])
+                metadata['upload_time_formatted'] = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                # Keep original if we can't parse it
+                pass
+        
+        return jsonify(metadata)
+    except Exception as e:
+        logger.error(f"Error getting model metadata: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@model_bp.route('/uuid/<uuid>/metadata', methods=['GET'])
+def get_model_metadata_by_uuid(uuid):
+    """
+    Get metadata for a model by UUID.
+
+    Args:
+        uuid: UUID of the model
+        
+    Returns:
+        JSON response with model metadata
+    """
+    try:
+        metadata = db.get_metadata(uuid)
+        if not metadata:
+            return jsonify({"error": f"Metadata not found for model with UUID {uuid}"}), 404
+            
+        # Add upload time in a readable format
+        if 'upload_time' in metadata:
+            try:
+                from datetime import datetime
+                timestamp = datetime.fromisoformat(metadata['upload_time'])
+                metadata['upload_time_formatted'] = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                # Keep original if we can't parse it
+                pass
+        
+        return jsonify(metadata)
+    except Exception as e:
+        logger.error(f"Error getting model metadata by UUID: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>/versions/<version>', methods=['POST'])
 def upload_model_version(model_name, version):
     """
     Upload and store a specific version of a model.
-    
+
     Args:
         model_name: Base name of the model
         version: Specific version string
@@ -186,97 +276,66 @@ def upload_model_version(model_name, version):
     Returns:
         JSON response with upload result
     """
+    # Check if a model file was uploaded
     if 'model' not in request.files:
         return jsonify({"error": "No model file provided"}), 400
-    
+        
     model_file = request.files['model']
     if model_file.filename == '':
         return jsonify({"error": "Empty model filename"}), 400
-    
-    # Create filename with versioning
-    filename = f"{model_name}_v{version}.onnx"
-    filepath = os.path.join(MODELS_DIR, filename)
-    
-    # Check if this version already exists
-    if os.path.exists(filepath):
+        
+    # Check if the version already exists
+    if db.get_model_by_name_version(model_name, version):
         return jsonify({"error": f"Version {version} of model {model_name} already exists"}), 409
-    
-    # Save the model file
-    model_file.save(filepath)
-    
-    # Extract metadata from form data if provided
-    metadata = {}
-    if 'metadata' in request.form:
-        try:
-            metadata = json.loads(request.form['metadata'])
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON in metadata form field, ignoring metadata")
-    
-    # Add version info to metadata
-    metadata['version'] = version
-    metadata['model_name'] = model_name
-    
-    # Validate model
+        
     try:
-        # Run model validation
-        is_valid, validation_info = validate_onnx_model(filepath)
+        # Read the model file
+        model_data = model_file.read()
         
-        if not is_valid:
-            # If validation fails, remove the model file
-            os.remove(filepath)
-            return jsonify({"error": f"Invalid model file: {validation_info.get('error', 'Unknown error')}"}), 400
+        # Extract metadata from form data if provided
+        metadata = {}
+        if 'metadata' in request.form:
+            try:
+                metadata = json.loads(request.form['metadata'])
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON in metadata form field, ignoring metadata")
+                
+        # Add version info to metadata
+        metadata['version'] = version
+        metadata['model_name'] = model_name
         
-        # Add validation info to metadata
-        metadata['validation_info'] = validation_info
+        # Generate a single UUID for both storage and database
+        single_uuid = str(uuid.uuid4())
+        logger.info(f"Generated single UUID {single_uuid} for model {model_name} version {version}")
         
-        # Save metadata to a separate file
-        save_metadata(filepath, metadata)
+        # Store the model file with this UUID
+        file_path, file_size = storage.store_model(single_uuid, model_data)
         
-        logger.info(f"Model {model_name} version {version} uploaded successfully")
+        # Add to the database with the same UUID
+        db_result = db.add_model_with_uuid(single_uuid, model_name, version, file_path, file_size)
+        if not db_result:
+            # If db insert failed, clean up the stored file
+            storage.delete_model(single_uuid)
+            return jsonify({"error": f"Database insert failed for model {model_name} version {version}"}), 500
+        
+        # Add metadata to the database
+        db.add_metadata(single_uuid, metadata)
         
         return jsonify({
-            "success": True, 
+            "success": True,
             "message": f"Model {model_name} version {version} uploaded successfully",
-            "model": {
-                "name": model_name,
-                "version": version,
-                "path": filepath,
-                "metadata": metadata
-            }
-        }), 200
-        
+            "uuid": single_uuid,
+            "size": file_size
+        })
     except Exception as e:
-        # If any error occurs, clean up files
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        clean_metadata(filepath)
-        
-        logger.error(f"Error during model upload: {e}")
-        return jsonify({"error": f"Error processing model: {str(e)}"}), 500
-
-@model_bp.route('/<model_name>', methods=['POST'])
-def upload_model(model_name):
-    """
-    Upload model and automatically assign the next patch version.
-    
-    Args:
-        model_name: Base name of the model
-        
-    Returns:
-        JSON response with upload result
-    """
-    # Get the next version number
-    new_version = get_next_version(model_name, MODELS_DIR)
-    version_str = version_to_string(new_version)
-    
-    # Use the version-specific upload endpoint
-    return upload_model_version(model_name, version_str)
+        logger.error(f"Error uploading model: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>/versions/<version>', methods=['DELETE'])
 def delete_model_version(model_name, version):
     """
     Delete a specific version of a model.
-    
+
     Args:
         model_name: Base name of the model
         version: Specific version to delete
@@ -284,73 +343,168 @@ def delete_model_version(model_name, version):
     Returns:
         JSON response with deletion result
     """
-    filename = f"{model_name}_v{version}.onnx"
-    filepath = os.path.join(MODELS_DIR, filename)
-    
-    if not os.path.exists(filepath):
-        return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
-    
     try:
-        # Delete the model file
-        os.remove(filepath)
-        
-        # Also delete the metadata file if it exists
-        clean_metadata(filepath)
+        model_info = db.get_model_by_name_version(model_name, version)
+        if not model_info:
+            return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
             
+        model_uuid = model_info['uuid']
+        
+        # Extract storage UUID from file path
+        file_path = model_info["file_path"]
+        try:
+            storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+            logger.info(f"Database UUID: {model_uuid}, Storage UUID: {storage_uuid}")
+        except Exception as e:
+            logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+            storage_uuid = model_uuid  # Fallback to database UUID
+        
+        # Delete from storage
+        storage.delete_model(storage_uuid)
+        
+        # Delete from database
+        db.delete_model(model_uuid)
+        
         return jsonify({
-            "message": f"Model {model_name} version {version} deleted successfully"
+            "message": f"Model {model_name} version {version} deleted successfully",
+            "uuid": model_uuid
         })
     except Exception as e:
         logger.error(f"Error deleting model version: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@model_bp.route('/uuid/<uuid>', methods=['DELETE'])
+def delete_model_by_uuid(uuid):
+    """
+    Delete a model by UUID.
+
+    Args:
+        uuid: UUID of the model
+        
+    Returns:
+        JSON response with deletion result
+    """
+    try:
+        model_info = db.get_model_by_uuid(uuid)
+        if not model_info:
+            return jsonify({"error": f"Model with UUID {uuid} not found"}), 404
+            
+        # Extract storage UUID from file path
+        file_path = model_info["file_path"]
+        try:
+            storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+            logger.info(f"Database UUID: {uuid}, Storage UUID: {storage_uuid}")
+        except Exception as e:
+            logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+            storage_uuid = uuid  # Fallback to database UUID
+        
+        # Delete from storage
+        storage.delete_model(storage_uuid)
+        
+        # Delete from database
+        db.delete_model(uuid)
+        
+        return jsonify({
+            "message": f"Model with UUID {uuid} deleted successfully",
+            "model_name": model_info['name'],
+            "version": model_info['version']
+        })
+    except Exception as e:
+        logger.error(f"Error deleting model by UUID: {e}")
         return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>', methods=['DELETE'])
 def delete_model(model_name):
     """
     Delete all versions of a model.
-    
+
     Args:
         model_name: Base name of the model
         
     Returns:
         JSON response with deletion result
     """
-    versions = get_model_versions(model_name, MODELS_DIR)
-    
-    if not versions:
-        return jsonify({"error": f"No versions found for model {model_name}"}), 404
-    
-    deleted_count = 0
-    errors = []
-    
-    for filename, _ in versions:
-        filepath = os.path.join(MODELS_DIR, filename)
-        try:
-            # Delete the model file
-            os.remove(filepath)
+    try:
+        # Get all versions of the model
+        grouped_models = db.list_models()
+        
+        if model_name not in grouped_models:
+            return jsonify({"error": f"Model {model_name} not found"}), 404
             
-            # Also delete the metadata file if it exists
-            clean_metadata(filepath)
+        deleted_count = 0
+        for model in grouped_models[model_name]:
+            # Extract storage UUID from file path
+            file_path = model["file_path"]
+            try:
+                storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+                logger.info(f"Database UUID: {model['uuid']}, Storage UUID: {storage_uuid}")
+            except Exception as e:
+                logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+                storage_uuid = model['uuid']  # Fallback to database UUID
+            
+            # Delete from storage
+            storage.delete_model(storage_uuid)
+            
+            # Delete from database
+            db.delete_model(model['uuid'])
             
             deleted_count += 1
-        except Exception as e:
-            errors.append(f"Failed to delete {filename}: {str(e)}")
-    
-    if errors:
+            
         return jsonify({
-            "message": f"Partially deleted model {model_name}. Deleted {deleted_count} of {len(versions)} versions.",
-            "errors": errors
-        }), 207  # Multi-Status
-    
-    return jsonify({
-        "message": f"Successfully deleted all {deleted_count} versions of model {model_name}"
-    })
+            "message": f"All versions of model {model_name} deleted successfully",
+            "deleted_count": deleted_count
+        })
+    except Exception as e:
+        logger.error(f"Error deleting model: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@model_bp.route('/uuid/<uuid>', methods=['GET'])
+def get_model_by_uuid(uuid):
+    """
+    Get a model by UUID.
+
+    Args:
+        uuid: UUID of the model
+        
+    Returns:
+        The model file as attachment
+    """
+    try:
+        model_info = db.get_model_by_uuid(uuid)
+        if not model_info:
+            return jsonify({"error": f"Model with UUID {uuid} not found"}), 404
+
+        # Extract the storage UUID from the file path
+        # Format of file_path is: "/data/models/[storage_uuid].onnx"
+        file_path = model_info["file_path"]
+        try:
+            storage_uuid = os.path.basename(file_path).replace(".onnx", "")
+            logger.info(f"Database UUID: {uuid}, Storage UUID: {storage_uuid}")
+        except Exception as e:
+            logger.error(f"Failed to extract storage UUID from path {file_path}: {e}")
+            storage_uuid = uuid  # Fallback to database UUID
+
+        model_data = storage.get_model(storage_uuid)
+        if not model_data:
+            return jsonify({"error": f"Model file not found for UUID {uuid}"}), 404
+
+        filename = f"{model_info['name']}_v{model_info['version']}.onnx"
+
+        return send_file(
+            io.BytesIO(model_data),
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            attachment_filename=filename
+        )
+    except Exception as e:
+        logger.error(f"Error getting model by UUID: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @model_bp.route('/<model_name>/versions/<version>/detail', methods=['GET'])
 def get_model_detail(model_name, version):
     """
     Get detailed information about a specific model version.
-    
+
     Args:
         model_name: Base name of the model
         version: Specific version to get details for
@@ -358,37 +512,63 @@ def get_model_detail(model_name, version):
     Returns:
         JSON response with detailed model information
     """
-    filename = f"{model_name}_v{version}.onnx"
-    filepath = os.path.join(MODELS_DIR, filename)
-    
-    if not os.path.exists(filepath):
-        return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
-    
     try:
-        # Get model summary
-        summary = get_model_summary(filepath)
+        model_info = db.get_model_by_name_version(model_name, version)
+        if not model_info:
+            return jsonify({"error": f"Model {model_name} version {version} not found"}), 404
+            
+        # Get metadata
+        metadata = db.get_metadata(model_info['uuid'])
         
-        # Load metadata
-        metadata = load_metadata(filepath)
-        
-        # Combine information
+        # Construct response
         response = {
             "model_name": model_name,
             "version": version,
-            "filename": filename,
-            "path": filepath,
-            "size_bytes": summary["size_bytes"],
-            "is_valid": summary["is_valid"],
-            "validation_info": summary["validation_info"],
-            "metadata": metadata,
-            "filesystem_info": {
-                "created": os.path.getctime(filepath),
-                "modified": os.path.getmtime(filepath),
-                "permissions": oct(os.stat(filepath).st_mode)[-3:]
-            }
+            "uuid": model_info['uuid'],
+            "filename": f"{model_name}_v{version}.onnx",
+            "path": model_info['file_path'],
+            "size_bytes": model_info['file_size'],
+            "created_at": model_info['created_at'],
+            "metadata": metadata or {}
         }
         
         return jsonify(response)
     except Exception as e:
         logger.error(f"Error getting model details: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@model_bp.route('/uuid/<uuid>/detail', methods=['GET'])
+def get_model_detail_by_uuid(uuid):
+    """
+    Get detailed information about a model by UUID.
+
+    Args:
+        uuid: UUID of the model
+        
+    Returns:
+        JSON response with detailed model information
+    """
+    try:
+        model_info = db.get_model_by_uuid(uuid)
+        if not model_info:
+            return jsonify({"error": f"Model with UUID {uuid} not found"}), 404
+            
+        # Get metadata
+        metadata = db.get_metadata(uuid)
+        
+        # Construct response
+        response = {
+            "model_name": model_info['name'],
+            "version": model_info['version'],
+            "uuid": uuid,
+            "filename": f"{model_info['name']}_v{model_info['version']}.onnx",
+            "path": model_info['file_path'],
+            "size_bytes": model_info['file_size'],
+            "created_at": model_info['created_at'],
+            "metadata": metadata or {}
+        }
+        
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"Error getting model details by UUID: {e}")
         return jsonify({"error": str(e)}), 500

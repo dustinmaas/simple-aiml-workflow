@@ -3,7 +3,7 @@ services:
   influxdb:
     container_name: metrics_influxdb
     hostname: metrics_influxdb
-    image: influxdb:2.7
+    image: influxdb:2.7.1
     ports:
       - "8086:8086"
     environment:
@@ -33,15 +33,17 @@ services:
     volumes:
       - ./model-server:/app
       - model-data:/data/models
+      - model-db:/data/db
     environment:
-      - MODEL_DIRECTORY=/data/models
+      - MODEL_STORAGE_DIR=${MODEL_STORAGE_DIR:-/data/models}
+      - MODEL_DB_PATH=${MODEL_DB_PATH:-/data/db/models.db}
     networks:
       - ai-ml-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:5000/health').status_code == 200 else 1)"]
-      interval: 5s
-      timeout: 1s
-      retries: 10
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
 
   # Inference Server - Provides inference API for models
@@ -51,18 +53,21 @@ services:
       - "5002:5000"
     volumes:
       - ./inference-server:/app
+      - inference-cache:/app/cache/models
     depends_on:
       - model-server
     environment:
-      - MODEL_SERVER_URL=http://model-server:5000
+      - MODEL_SERVER_URL=${MODEL_SERVER_URL:-http://model-server:5000}
+      - MODEL_CACHE_DIR=${MODEL_CACHE_DIR:-/app/cache/models}
+      - MAX_CACHE_SIZE=${MAX_CACHE_SIZE:-10}
     networks:
       - ai-ml-network
       - oran-sc-ric_ric_network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:5000/health').status_code == 200 else 1)"]
-      interval: 5s
-      timeout: 1s
-      retries: 10
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
 
   # Analysis and Training Environment - Jupyter Lab for data analysis and model training
@@ -76,19 +81,19 @@ services:
       - model-server
       - inference-server
     environment:
-      - MODEL_SERVER_URL=http://model-server:5000
-      - INFERENCE_SERVER_URL=http://inference-server:5000
+      - MODEL_SERVER_URL=${MODEL_SERVER_URL:-http://model-server:5000}
+      - INFERENCE_SERVER_URL=${INFERENCE_SERVER_URL:-http://inference-server:5000}
     env_file:
       - .env
     networks:
       - ai-ml-network
       - oran-sc-ric_ric_network
-    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=${JUPYTER_TOKEN}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8888').getcode() == 200 else 1)"]
-      interval: 5s
-      timeout: 1s
-      retries: 10
+      test: ["CMD", "curl", "-f", "http://localhost:8888"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 10s
 
 networks:
@@ -96,7 +101,14 @@ networks:
     driver: bridge
   oran-sc-ric_ric_network:
     external: true
+    name: oran-sc-ric_ric_network
 
 volumes:
   model-data:
+    name: aiml-model-data
+  model-db:
+    name: aiml-model-db
   influxdb-data:
+    name: aiml-influxdb-data
+  inference-cache:
+    name: aiml-inference-cache

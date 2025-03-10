@@ -14,9 +14,9 @@ from flask import Flask
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from routes.health import health_bp
-from routes.prediction_routes import prediction_bp
-from utils.model_cache import ModelCache
-from utils.constants import MODEL_SERVER_URL, MAX_CONTENT_LENGTH
+from routes.inference_routes import inference_bp
+from utils.constants import MODEL_CACHE_DIR, MODEL_SERVER_URL
+from utils.model_service import ModelService
 
 # Configure logging
 logging.basicConfig(
@@ -40,26 +40,31 @@ def create_app(test_config=None):
     
     # Load default configuration
     app.config.from_mapping(
+        MAX_CONTENT_LENGTH=10 * 1024 * 1024,  # 10 MB max request size
         MODEL_SERVER_URL=MODEL_SERVER_URL,
-        MAX_CONTENT_LENGTH=MAX_CONTENT_LENGTH,
     )
     
     # Override with test config if provided
     if test_config:
         app.config.update(test_config)
     
-    # Initialize model cache
-    app.model_cache = ModelCache(app.config['MODEL_SERVER_URL'])
+    # Ensure the model cache directory exists
+    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+    
+    # Initialize model service and attach to app
+    # Note: ModelService handles file-based model caching
+    app.model_service = ModelService(MODEL_CACHE_DIR)
     
     # Register blueprints
     app.register_blueprint(health_bp)
-    app.register_blueprint(prediction_bp)
+    app.register_blueprint(inference_bp)
     
     # Apply custom error handlers
     register_error_handlers(app)
     
     # Log that the app was initialized
-    logger.info(f"Initialized inference server with model server URL: {app.config['MODEL_SERVER_URL']}")
+    logger.info(f"Initialized inference server with model cache at: {MODEL_CACHE_DIR}")
+    logger.info(f"Using model server at: {MODEL_SERVER_URL}")
     
     return app
 
