@@ -12,7 +12,11 @@
 #     name: python3
 # ---
 
+# %% [markdown]
+# # Network Metrics Analysis and Model Training
+
 # %%
+# Imports and setup
 import pandas as pd
 import torch
 import numpy as np
@@ -25,25 +29,24 @@ import datasets
 import huggingface_hub as hf
 import onnx
 import onnxruntime as ort
+import datetime
+import json
+import shutil
+from huggingface_hub import hf_hub_download
 
 # Get Hugging Face token from environment variable
 HF_TOKEN = os.environ.get("HF_TOKEN")
 if not HF_TOKEN:
     print("Warning: HF_TOKEN environment variable not found. You may need to set it for Hugging Face operations.")
 
+# %% [markdown]
+# ## 1. Creating and Uploading Datasets to Hugging Face
+
 # %%
+# Load the original dataset
 df = pd.read_csv('/app/data/data.csv')
 
 # %%
-# in Mbps
-# df['DRB.UEThpDl'] = df['DRB.UEThpDl'] / 1000.0
-# df['DRB.RlcSduTransmittedVolumeDL'] = df['DRB.RlcSduTransmittedVolumeDL'] / 1000.0
-# df.describe()
-# df
-
-# %%
-# use datasets to create a dataset and upload to huggingface
-
 # Convert the pandas DataFrame to a Hugging Face Dataset
 dataset = datasets.Dataset.from_pandas(df)
 
@@ -51,48 +54,31 @@ dataset = datasets.Dataset.from_pandas(df)
 print(f"Dataset has {len(dataset)} rows and the following features:")
 print(dataset.features)
 
-# Create a sample split to test the dataset
-# dataset_dict = dataset.train_test_split(test_size=0.2, seed=42)
-# print(f"Train set: {len(dataset_dict['train'])} examples")
-# print(f"Test set: {len(dataset_dict['test'])} examples")
+# %%
+# Set the repository name for your dataset
+repo_name = "cyberpowder/cyberpowder-network-metrics"
+
+# Create the repository if it doesn't exist
+hf_api = hf.HfApi()
+try:
+    hf_api.create_repo(repo_name, private=True, token=HF_TOKEN)
+    print(f"Created new repository: {repo_name}")
+except Exception as e:
+    print(f"Repository may already exist or error creating it: {e}")
 
 # %%
 # Push the dataset to the Hugging Face Hub
-# First, login to Hugging Face (you'll need to provide a token)
-# To generate a token, go to: https://huggingface.co/settings/tokens
-
-# Uncomment and run the login line when you're ready to upload
-
-
-# %%
-# Set the repository name for your dataset
-repo_name = "cyberpowder/cyberpowder-network-metrics"  # Replace with your username
-
-hf_api = hf.HfApi()
-hf_api.create_repo(repo_name, private=True, token=HF_TOKEN)
-
-
-# %%
-
-# Uncomment and run the following lines to push the dataset to the Hub
 dataset.push_to_hub(
     repo_name,
     private=True,  # Set to False to make it publicly accessible
     token=HF_TOKEN,
 )
 
-# print(f"Dataset successfully uploaded to https://huggingface.co/datasets/{repo_name}")
+print(f"Dataset successfully uploaded to https://huggingface.co/datasets/{repo_name}")
 
 # %%
-# load the dataset from the hub
-dataset = datasets.load_dataset(repo_name, token=HF_TOKEN)
-
-# %%
-# Create a new configuration with selected features and train-test split
-
-# Define features to use as model inputs and targets
-
-df = dataset['train'].to_pandas()
+# Create a filtered dataset for UE1
+df = dataset.to_pandas()
 
 # Filter for ue_id 1 only
 print(f"Original dataset size: {len(df)} rows")
@@ -102,16 +88,11 @@ print(f"After filtering for ue_id 1: {len(df)} rows")
 # Create a new dataset from the processed DataFrame
 ml_dataset = datasets.Dataset.from_pandas(df)
 
-# # Create train-test-validation splits (70/20/10)
-# splits = ml_dataset.train_test_split(test_size=0.3, seed=42)
-# test_valid = splits['test'].train_test_split(test_size=0.33, seed=42)
-    
-
 # %%
-# Push the updated dataset with the new ML configuration to HuggingFace
+# Push the UE1 dataset with the ML-ready configuration
 ml_dataset.push_to_hub(
     repo_name,
-    config_name="ue1_ml_ready",  # This creates a new configuration in the same repo
+    config_name="ue1_ml_ready",  # Creates a new configuration in the same repo
     private=True,
     token=HF_TOKEN,
 )
@@ -119,24 +100,26 @@ ml_dataset.push_to_hub(
 print(f"UE1 ML-ready dataset configuration successfully pushed to {repo_name}")
 print(f"To load this specific configuration: datasets.load_dataset('{repo_name}', 'ue1_ml_ready')")
 
-# %%
+# %% [markdown]
+# ## 2. Downloading Datasets from Hugging Face
 
+# %%
+# Load the dataset from Hugging Face
 dataset_ue1 = datasets.load_dataset(repo_name, 'ue1_ml_ready', token=HF_TOKEN)
+print(f"Successfully loaded dataset with {len(dataset_ue1['train'])} samples")
 
 # %%
+# Convert to pandas and prepare for analysis
 df = dataset_ue1['train'].to_pandas()
 df['timestamp'] = pd.to_datetime(df['timestamp'])
+print("Dataset statistics:")
 df.describe()
 
-# %%
-# working on filtering out transient vals (not done)
-# ue1_df['min_thp_per'] = df.groupby('min_prb_ratio')['DRB.UEThpDl'].transform('min')
-# ue1_df[ue1_df['min_prb_ratio'] == 50]
-#ue1_df[ue1_df['DRB.UEThpDl'] == ue1_df['min_thp_per']].to_string()
+# %% [markdown]
+# ## 3. Visualizing the UE1 Dataset
 
 # %%
-# get a general idea of what the relevant data points look like
-# Create a Plotly time series figure for all metrics
+# Time series visualization of key metrics
 fig = go.Figure()
 
 # Add each metric as a separate trace
@@ -175,9 +158,7 @@ fig.update_layout(
 fig.show()
 
 # %%
-# Tput vs. CQI and min prb ratio
-# note the transient values at the ratio switch points (95 -> 50 is the most egregious) 
-# Create a function to make a scatter plot for a specific min_prb_ratio value
+# Throughput vs. CQI by min_prb_ratio
 def make_scatter_for_prb(df, prb_value):
     df_filtered = df[df['min_prb_ratio'] == prb_value]
     return go.Scatter(
@@ -228,39 +209,7 @@ for i in range(len(unique_prb_values)):
 fig.show()
 
 # %%
-# another view
-data = df[['CQI','DRB.UEThpDl', 'min_prb_ratio']]
-
-# Create a scatter matrix with Plotly
-# Use Plotly Express for pairplot equivalent
-fig = px.scatter_matrix(
-    data,
-    dimensions=["CQI", "DRB.UEThpDl", "min_prb_ratio"],
-    color="DRB.UEThpDl",
-    color_continuous_scale=px.colors.sequential.Viridis,
-    opacity=0.8,
-    title="Scatter Matrix (Pair Plot) of Network Metrics"
-)
-
-# Update layout
-fig.update_layout(
-    width=800,
-    height=800,
-    plot_bgcolor='white'
-)
-
-# Update traces
-fig.update_traces(
-    diagonal_visible=False,
-    showupperhalf=False,
-    marker=dict(size=5)
-)
-
-fig.show()
-
-# %%
-# device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
-# print(f"device {device}")
+# Prepare dataset for model training
 device = 'cpu'
 
 dataset_ue1.set_format(type='torch', columns=['CQI', 'DRB.UEThpDl', 'min_prb_ratio'], dtype=torch.float32)
@@ -269,80 +218,38 @@ dataset_ue1.set_format(type='torch', columns=['CQI', 'DRB.UEThpDl', 'min_prb_rat
 X = torch.stack([dataset_ue1['train']['CQI'], dataset_ue1['train']['DRB.UEThpDl']], dim=1)
 y = dataset_ue1['train']['min_prb_ratio'].unsqueeze(-1)
 
+# %% [markdown]
+# ## 4. Linear Regression Model Definition and Training
+
 # %%
+# Define the linear regression model
 class LinearRegressionModel(torch.nn.Module):
-    """
-    Linear regression model with batch normalization.
-    
-    This model is designed to predict min_prb_ratio based on input features
-    like CQI and throughput. It includes batch normalization for inputs and
-    stores normalization parameters for outputs to ensure consistent predictions.
-    """
-    def __init__(self, input_features: int = 2, output_features: int = 1):
-        """
-        Initialize the model with configurable feature dimensions.
-        
-        Args:
-            input_features: Number of input features (default: 2)
-            output_features: Number of output features (default: 1)
-        """
+    def __init__(self):
         super(LinearRegressionModel, self).__init__()
-        self.linear = torch.nn.Linear(input_features, output_features)
+        self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
         
         # Apply batch normalization to input features
-        self.batch_norm = torch.nn.BatchNorm1d(input_features)
+        self.batch_norm = torch.nn.BatchNorm1d(2)
         
         # Register buffers to store the mean and standard deviation of the output features
-        self.register_buffer('y_mean', torch.zeros(output_features))
-        self.register_buffer('y_std', torch.ones(output_features))
+        self.register_buffer('y_mean', torch.zeros(1))
+        self.register_buffer('y_std', torch.ones(1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the model.
-        
-        Args:
-            x: Input tensor with shape [batch_size, input_features]
-            
-        Returns:
-            Output tensor with shape [batch_size, output_features]
-        """
         x_normalized = self.batch_norm(x)
         output = self.linear(x_normalized)
         
-        # Denormalize output during inference
         if not self.training:
             with torch.no_grad():
                 output = output * self.y_std + self.y_mean
                 
         return output
-    
-    def get_input_shape(self) -> List[int]:
-        """
-        Get the expected input shape for this model.
-        
-        Returns:
-            List representing the input shape [batch_size, input_features]
-        """
-        return [None, self.batch_norm.num_features]
-    
-    def get_output_shape(self) -> List[int]:
-        """
-        Get the expected output shape for this model.
-        
-        Returns:
-            List representing the output shape [batch_size, output_features]
-        """
-        return [None, self.linear.out_features]
-
 
 # %%
-
-# Create and train the model using the locally defined model class
+# Create and train the linear model
 model = LinearRegressionModel()
 model.y_mean = y.mean(dim=0, keepdim=True)
 model.y_std = y.std(dim=0, keepdim=True)
-
-device = 'cpu' # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 X.to(device)
 y.to(device)
@@ -350,7 +257,7 @@ criterion = torch.nn.MSELoss() # Mean Squared Error
 optimizer = torch.optim.SGD(model.parameters(), lr=.05)
 
 # Train the model
-num_epochs = 100
+num_epochs = 500
 for epoch in range(num_epochs):
     model.train()
     # Forward pass
@@ -365,8 +272,12 @@ for epoch in range(num_epochs):
     if (epoch) % 10 == 0:
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
+# %% [markdown]
+# ## 5. Visualizing the Linear Regression Hyperplane Fit
+
 # %%
-# look at the hyperplane fit
+# Examine the hyperplane fit
+model.eval()
 
 # Get the learned parameters
 learned_weights = model.linear.weight.data.cpu().numpy()
@@ -442,7 +353,7 @@ fig.add_trace(surface)
 
 # Update layout with labels and title
 fig.update_layout(
-    title='Hyperplane Fit (Unscaled Values)',
+    title='Linear Regression Hyperplane Fit (Unscaled Values)',
     scene=dict(
         xaxis_title='CQI',
         yaxis_title='DRB.UEThpDL (Mbps)',
@@ -459,203 +370,13 @@ fig.update_layout(
     height=600
 )
 
-# Show the interactive plot
 fig.show()
-# %%
-# Save the model to a temporary file
-import datetime
-import json
 
-model_name = "linear_regression_model"
-model_version = "1.0.1"  # Follow semantic versioning: major.minor.patch
-
-# Calculate loss as a metric
-with torch.no_grad():
-    y_pred = model(X)
-    loss = criterion(y_pred, (y - model.y_mean) / model.y_std).item()
-
-# Metadata to include with the model
-metadata_props = {
-    "version": model_version,
-    "training_date": datetime.datetime.now().isoformat(),
-    "framework": f"PyTorch {torch.__version__}",
-    "dataset": "network_metrics_exp_1741030459",
-    "metrics": json.dumps({"mse": loss}),
-    "description": "Linear regression model for PRB prediction based on CQI and throughput",
-    "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
-    "output_features": json.dumps(["min_prb_ratio"])
-}
-
-# PyTorch needs to trace the operations inside the model to generate the computational graph
-dummy_input = torch.randn(1, 2)  # Example dummy input for export
-
-# Use a temp file for export before uploading to model server
-temp_dir = tempfile.mkdtemp()
-temp_model_path = os.path.join(temp_dir, f"{model_name}_v{model_version}.onnx")
-
-# Export the model to ONNX without any embedded metadata
-torch.onnx.export(
-    model, 
-    dummy_input, 
-    temp_model_path, 
-    verbose=True, 
-    input_names=["input"], 
-    output_names=["output"], 
-    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
-)
-
-# Send the model and metadata to Hugging Face
-model_repo = f"cyberpowder/{model_name}_v{model_version}"
-
-# Create metadata JSON file
-metadata_path = os.path.join(temp_dir, f"{model_name}_v{model_version}_metadata.json")
-with open(metadata_path, 'w') as f:
-    json.dump(metadata_props, f, indent=2)
-
-# Create or ensure repository exists
-try:
-    hf_api.create_repo(model_repo, private=True, token=HF_TOKEN)
-    print(f"Created new repository: {model_repo}")
-except Exception as e:
-    print(f"Repository may already exist or error creating it: {e}")
-
-# Upload ONNX model to Hugging Face
-print(f"Uploading ONNX model to Hugging Face: {model_repo}")
-hf_api.upload_file(
-    path_or_fileobj=temp_model_path,
-    repo_id=model_repo,
-    path_in_repo=f"{model_name}_v{model_version}.onnx",
-    token=HF_TOKEN
-)
-
-# Upload metadata to Hugging Face
-print(f"Uploading metadata to Hugging Face: {model_repo}")
-hf_api.upload_file(
-    path_or_fileobj=metadata_path,
-    repo_id=model_repo,
-    path_in_repo=f"{model_name}_v{model_version}_metadata.json",
-    token=HF_TOKEN
-)
-
-print(f"Model and metadata successfully uploaded to Hugging Face: {model_repo}")
-
+# %% [markdown]
+# ## 6. Polynomial Regression Model Definition and Training
 
 # %%
-# Download and use the model from Hugging Face
-from huggingface_hub import hf_hub_download
-
-model_repo = f"cyberpowder/{model_name}_v{model_version}"
-model_filename = f"{model_name}_v{model_version}.onnx"
-metadata_filename = f"{model_name}_v{model_version}_metadata.json"
-
-# List files in the repo to confirm upload was successful
-print(f"Files in repository {model_repo}:")
-model_files = hf_api.list_repo_files(model_repo, token=HF_TOKEN)
-for file in model_files:
-    print(f"  - {file}")
-
-# Create temporary directory for downloaded files
-download_dir = tempfile.mkdtemp()
-
-try:
-    # Download model from Hugging Face
-    print(f"\nDownloading model from Hugging Face...")
-    model_path = hf_hub_download(
-        repo_id=model_repo,
-        filename=model_filename,
-        token=HF_TOKEN,
-        local_dir=download_dir
-    )
-    
-    # Download metadata
-    print(f"Downloading metadata from Hugging Face...")
-    metadata_path = hf_hub_download(
-        repo_id=model_repo,
-        filename=metadata_filename,
-        token=HF_TOKEN,
-        local_dir=download_dir
-    )
-    
-    # Load metadata
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    print(f"\nModel metadata:")
-    print(f"  Version: {metadata.get('version')}")
-    print(f"  Training date: {metadata.get('training_date')}")
-    print(f"  Description: {metadata.get('description')}")
-    print(f"  Framework: {metadata.get('framework')}")
-    print(f"  Metrics: {metadata.get('metrics')}")
-    
-    # Load model with ONNX Runtime
-    print(f"\nLoading model for inference...")
-    session = ort.InferenceSession(model_path)
-    
-    # Sample data for inference
-    sample_inputs = [
-        [5.0, 20.0],   # Low CQI, low throughput
-        [10.0, 50.0],  # Medium CQI, medium throughput
-        [15.0, 100.0], # High CQI, high throughput
-        [8.0, 80.0],   # Medium-low CQI, medium-high throughput
-        [12.0, 30.0]   # Medium-high CQI, medium-low throughput
-    ]
-    
-    input_tensor = np.array(sample_inputs, dtype=np.float32)
-    
-    # Run inference
-    print(f"\nRunning inference with sample data...")
-    outputs = session.run(None, {"input": input_tensor})
-    
-    # Print results as a table
-    print("\nPrediction Results:")
-    print("------------------------------------------------------")
-    print("   CQI   | Throughput (Mbps) | Predicted min_prb_ratio")
-    print("------------------------------------------------------")
-    for i, sample in enumerate(sample_inputs):
-        print(f"  {sample[0]:5.1f}  |      {sample[1]:7.1f}     |        {outputs[0][i][0]:7.2f}")
-    print("------------------------------------------------------")
-    
-    # Create a visualization
-    fig = go.Figure()
-    
-    # Add points for the samples
-    fig.add_trace(go.Scatter3d(
-        x=[sample[0] for sample in sample_inputs],  # CQI
-        y=[sample[1] for sample in sample_inputs],  # Throughput
-        z=[pred[0] for pred in outputs[0]],        # Predicted min_prb_ratio
-        mode='markers',
-        marker=dict(
-            size=8,
-            color='red',
-        ),
-        name='Predictions',
-        hovertemplate='CQI: %{x:.1f}<br>Throughput: %{y:.1f} Mbps<br>Predicted PRB: %{z:.1f}%<extra></extra>'
-    ))
-    
-    # Update layout
-    fig.update_layout(
-        title=f"Predictions from Hugging Face Model ({model_name} v{model_version})",
-        scene=dict(
-            xaxis_title='CQI',
-            yaxis_title='Throughput (Mbps)',
-            zaxis_title='min_prb_ratio (%)',
-        ),
-        width=800,
-        height=600
-    )
-    
-    fig.show()
-    
-except Exception as e:
-    print(f"Error using model from Hugging Face: {e}")
-    
-finally:
-    # Clean up
-    import shutil
-    shutil.rmtree(download_dir, ignore_errors=True)
-
-# %%
-# Implementing a Polynomial Regression Model
+# Define the polynomial regression model
 class PolynomialRegressionModel(torch.nn.Module):
     def __init__(self, degree=2):
         super(PolynomialRegressionModel, self).__init__()
@@ -698,14 +419,14 @@ class PolynomialRegressionModel(torch.nn.Module):
         return torch.cat(poly_features, dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Transform input to polynomial features
+        # First transform input to polynomial features
         x_poly = self._polynomial_features(x)
         
-        # Apply batch normalization
-        x_normalized = self.batch_norm(x_poly)
+        # Then apply batch normalization to polynomial features
+        x_poly_normalized = self.batch_norm(x_poly)
         
-        # Apply linear transformation
-        output = self.linear(x_normalized)
+        # Apply linear transformation to normalized polynomial features
+        output = self.linear(x_poly_normalized)
         
         # Denormalize output during inference
         if not self.training:
@@ -716,7 +437,7 @@ class PolynomialRegressionModel(torch.nn.Module):
 
 # %%
 # Create and train the polynomial regression model
-poly_model = PolynomialRegressionModel(degree=6)  # Using degree 3 polynomial
+poly_model = PolynomialRegressionModel(degree=2)  # Using degree 2 polynomial
 poly_model.y_mean = y.mean(dim=0, keepdim=True)
 poly_model.y_std = y.std(dim=0, keepdim=True)
 poly_model.to(device)
@@ -726,7 +447,7 @@ criterion = torch.nn.MSELoss()
 optimizer = torch.optim.SGD(poly_model.parameters(), lr=0.01)
 
 # Train the model
-num_epochs = 5500
+num_epochs = 10000
 for epoch in range(num_epochs):
     poly_model.train()
     # Forward pass
@@ -738,31 +459,57 @@ for epoch in range(num_epochs):
     loss.backward()
     optimizer.step()
 
-    if (epoch) % 100 == 0:
+    if (epoch) % 20 == 0:
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
-# %%
-# Calculate loss for comparison with linear model
-with torch.no_grad():
-    linear_pred = model(X)
-    linear_loss = criterion(linear_pred, (y - model.y_mean) / model.y_std).item()
-    
-    poly_pred = poly_model(X)
-    poly_loss = criterion(poly_pred, (y - poly_model.y_mean) / poly_model.y_std).item()
-
-print(f"Linear Regression Loss: {linear_loss:.6f}")
-print(f"Polynomial Regression Loss: {poly_loss:.6f}")
-print(f"Improvement: {(1 - poly_loss/linear_loss) * 100:.2f}%")
+# %% [markdown]
+# ## 7. Comparing Linear and Polynomial Regression Models
 
 # %%
-# Visualize the polynomial regression model's predictions
-poly_model.eval()
+# Set both models to evaluation mode for fair comparison
 model.eval()
+poly_model.eval()
+
+# Calculate comprehensive performance metrics
+with torch.no_grad():
+    # Get raw predictions from both models
+    linear_preds = model(X)
+    poly_preds = poly_model(X)
+    
+    # Calculate MSE directly against raw targets
+    linear_mse = torch.nn.functional.mse_loss(linear_preds, y).item()
+    poly_mse = torch.nn.functional.mse_loss(poly_preds, y).item()
+    
+    # Calculate R² score (coefficient of determination)
+    y_mean = torch.mean(y)
+    total_variance = torch.sum((y - y_mean)**2)
+    linear_residual_variance = torch.sum((y - linear_preds)**2)
+    poly_residual_variance = torch.sum((y - poly_preds)**2)
+    
+    linear_r2 = (1 - linear_residual_variance / total_variance).item()
+    poly_r2 = (1 - poly_residual_variance / total_variance).item()
+    
+    # Calculate mean absolute error
+    linear_mae = torch.mean(torch.abs(linear_preds - y)).item()
+    poly_mae = torch.mean(torch.abs(poly_preds - y)).item()
+
+# Print comparison results
+print(f"Performance Metrics Comparison:")
+print(f"{'Metric':<20} {'Linear':<15} {'Polynomial':<15} {'Improvement':<15}")
+print(f"{'-'*60}")
+print(f"{'MSE':<20} {linear_mse:<15.6f} {poly_mse:<15.6f} {(1 - poly_mse/linear_mse)*100:<15.2f}%")
+print(f"{'MAE':<20} {linear_mae:<15.6f} {poly_mae:<15.6f} {(1 - poly_mae/linear_mae)*100:<15.2f}%")
+print(f"{'R² Score':<20} {linear_r2:<15.6f} {poly_r2:<15.6f} {(poly_r2 - linear_r2)*100:<15.2f}%")
+
+# %%
+# Visual comparison of both models
+model.eval()
+poly_model.eval()
 
 # Create a grid of points for visualization
 grid_size = 30
-x1_range = np.linspace(X[:,0].min(), X[:,0].max(), grid_size)
-x2_range = np.linspace(X[:,1].min(), X[:,1].max(), grid_size)
+x1_range = np.linspace(features_unscaled[:,0].min(), features_unscaled[:,0].max(), grid_size)
+x2_range = np.linspace(features_unscaled[:,1].min(), features_unscaled[:,1].max(), grid_size)
 X1, X2 = np.meshgrid(x1_range, x2_range)
 
 # Flatten the grid points for prediction
@@ -783,9 +530,9 @@ fig = make_subplots(
 )
 
 # Sample a subset of data points for visualization
-sample_indices = np.random.choice(len(X), size=min(300, len(X)), replace=False)
-sample_features = X[sample_indices]
-sample_targets = y[sample_indices]
+sample_indices = np.random.choice(len(features_unscaled), size=min(300, len(features_unscaled)), replace=False)
+sample_features = features_unscaled[sample_indices]
+sample_targets = targets_unscaled[sample_indices]
 
 # Add data points to both subplots
 for i in range(1, 3):
@@ -854,23 +601,37 @@ for i in range(1, 3):
 
 fig.show()
 
+# %% [markdown]
+# ## 8. Uploading the Polynomial Regression Model to Hugging Face
+
 # %%
 # Save the polynomial regression model to ONNX and upload to Hugging Face
 poly_model_name = "polynomial_regression_model"
 poly_model_version = "1.0.0"  # First version
 
-# Calculate loss as a metric
+# Calculate comprehensive metrics for metadata
 with torch.no_grad():
-    poly_pred = poly_model(X)
-    poly_loss = criterion(poly_pred, (y - poly_model.y_mean) / poly_model.y_std).item()
+    poly_preds = poly_model(X)
+    poly_mse = torch.nn.functional.mse_loss(poly_preds, y).item()
+    poly_mae = torch.mean(torch.abs(poly_preds - y)).item()
+    
+    # Calculate R² score (coefficient of determination)
+    y_mean = torch.mean(y)
+    total_variance = torch.sum((y - y_mean)**2)
+    poly_residual_variance = torch.sum((y - poly_preds)**2)
+    poly_r2 = (1 - poly_residual_variance / total_variance).item()
 
-# Metadata with polynomial degree information
+# Metadata with polynomial degree information and comprehensive metrics
 poly_metadata_props = {
     "version": poly_model_version,
     "training_date": datetime.datetime.now().isoformat(),
     "framework": f"PyTorch {torch.__version__}",
     "dataset": "network_metrics_exp_1741030459",
-    "metrics": json.dumps({"mse": poly_loss}),
+    "metrics": json.dumps({
+        "mse": poly_mse,
+        "mae": poly_mae,
+        "r2": poly_r2
+    }),
     "description": f"Polynomial regression model (degree {poly_model.degree}) for PRB prediction based on CQI and throughput",
     "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
     "output_features": json.dumps(["min_prb_ratio"]),
@@ -929,8 +690,12 @@ hf_api.upload_file(
 
 print(f"Polynomial model and metadata successfully uploaded to Hugging Face: {poly_model_repo}")
 
+# %% [markdown]
+# ## Testing the Uploaded Polynomial Model
+
 # %%
-# Download and use the polynomial model from Hugging Face
+#TODO need to fix this to only use possible ranges.
+# Download and test the uploaded polynomial model
 poly_model_repo = f"cyberpowder/{poly_model_name}_v{poly_model_version}"
 poly_model_filename = f"{poly_model_name}_v{poly_model_version}.onnx"
 poly_metadata_filename = f"{poly_model_name}_v{poly_model_version}_metadata.json"
@@ -978,7 +743,7 @@ try:
     print(f"\nLoading polynomial model for inference...")
     poly_session = ort.InferenceSession(poly_model_path)
     
-    # Sample data for inference (same samples as used for linear model)
+    # Sample data for inference
     sample_inputs = [
         [5.0, 20.0],   # Low CQI, low throughput
         [10.0, 50.0],  # Medium CQI, medium throughput
@@ -990,42 +755,22 @@ try:
     input_tensor = np.array(sample_inputs, dtype=np.float32)
     
     # Run inference with polynomial model
-    print(f"\nRunning inference with polynomial model...")
+    print(f"\nRunning inference with sample data...")
     poly_outputs = poly_session.run(None, {"input": input_tensor})
     
-    # Run inference with linear model for comparison
-    print(f"Loading linear model for comparison...")
-    linear_session = ort.InferenceSession(model_path)
-    linear_outputs = linear_session.run(None, {"input": input_tensor})
-    
-    # Print results as a table with both models
-    print("\nComparison of Prediction Results:")
-    print("-----------------------------------------------------------------------------------")
-    print("   CQI   | Throughput (Mbps) | Linear Model Prediction | Polynomial Model Prediction")
-    print("-----------------------------------------------------------------------------------")
+    # Print results as a table
+    print("\nPrediction Results:")
+    print("------------------------------------------------------")
+    print("   CQI   | Throughput (Mbps) | Predicted min_prb_ratio")
+    print("------------------------------------------------------")
     for i, sample in enumerate(sample_inputs):
-        print(f"  {sample[0]:5.1f}  |      {sample[1]:7.1f}     |        {linear_outputs[0][i][0]:7.2f}        |          {poly_outputs[0][i][0]:7.2f}")
-    print("-----------------------------------------------------------------------------------")
+        print(f"  {sample[0]:5.1f}  |      {sample[1]:7.1f}     |        {poly_outputs[0][i][0]:7.2f}")
+    print("------------------------------------------------------")
     
-    # Create a comparison visualization
+    # Create a visualization
     fig = go.Figure()
     
-    # Add points for the linear model predictions
-    fig.add_trace(go.Scatter3d(
-        x=[sample[0] for sample in sample_inputs],  # CQI
-        y=[sample[1] for sample in sample_inputs],  # Throughput
-        z=[pred[0] for pred in linear_outputs[0]],  # Predicted min_prb_ratio
-        mode='markers',
-        marker=dict(
-            size=8,
-            color='blue',
-            symbol='circle'
-        ),
-        name='Linear Model Predictions',
-        hovertemplate='CQI: %{x:.1f}<br>Throughput: %{y:.1f} Mbps<br>Predicted PRB: %{z:.1f}%<extra></extra>'
-    ))
-    
-    # Add points for the polynomial model predictions
+    # Add points for the samples
     fig.add_trace(go.Scatter3d(
         x=[sample[0] for sample in sample_inputs],  # CQI
         y=[sample[1] for sample in sample_inputs],  # Throughput
@@ -1042,7 +787,7 @@ try:
     
     # Update layout
     fig.update_layout(
-        title=f"Comparison of Linear vs. Polynomial Model Predictions",
+        title=f"Predictions from Polynomial Regression Model (Degree {poly_metadata.get('polynomial_degree')})",
         scene=dict(
             xaxis_title='CQI',
             yaxis_title='Throughput (Mbps)',
@@ -1059,5 +804,7 @@ except Exception as e:
     
 finally:
     # Clean up
-    import shutil
     shutil.rmtree(poly_download_dir, ignore_errors=True)
+    print("Test completed and temporary files cleaned up")
+
+# %%
