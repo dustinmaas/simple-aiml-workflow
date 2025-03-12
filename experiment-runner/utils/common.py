@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
 Common utility functions for experiment runner.
-
-Contains shared functions and constants.
 """
 
 import logging

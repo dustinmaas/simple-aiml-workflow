@@ -271,33 +271,78 @@ y = dataset_ue1['train']['min_prb_ratio'].unsqueeze(-1)
 
 # %%
 class LinearRegressionModel(torch.nn.Module):
-    def __init__(self):
+    """
+    Linear regression model with batch normalization.
+    
+    This model is designed to predict min_prb_ratio based on input features
+    like CQI and throughput. It includes batch normalization for inputs and
+    stores normalization parameters for outputs to ensure consistent predictions.
+    """
+    def __init__(self, input_features: int = 2, output_features: int = 1):
+        """
+        Initialize the model with configurable feature dimensions.
+        
+        Args:
+            input_features: Number of input features (default: 2)
+            output_features: Number of output features (default: 1)
+        """
         super(LinearRegressionModel, self).__init__()
-        self.linear = torch.nn.Linear(2, 1)  # two input features, one output feature
+        self.linear = torch.nn.Linear(input_features, output_features)
         
         # Apply batch normalization to input features
-        self.batch_norm = torch.nn.BatchNorm1d(2)
+        self.batch_norm = torch.nn.BatchNorm1d(input_features)
         
         # Register buffers to store the mean and standard deviation of the output features
-        self.register_buffer('y_mean', torch.zeros(1))
-        self.register_buffer('y_std', torch.ones(1))
+        self.register_buffer('y_mean', torch.zeros(output_features))
+        self.register_buffer('y_std', torch.ones(output_features))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the model.
+        
+        Args:
+            x: Input tensor with shape [batch_size, input_features]
+            
+        Returns:
+            Output tensor with shape [batch_size, output_features]
+        """
         x_normalized = self.batch_norm(x)
         output = self.linear(x_normalized)
         
+        # Denormalize output during inference
         if not self.training:
             with torch.no_grad():
                 output = output * self.y_std + self.y_mean
                 
         return output
+    
+    def get_input_shape(self) -> List[int]:
+        """
+        Get the expected input shape for this model.
+        
+        Returns:
+            List representing the input shape [batch_size, input_features]
+        """
+        return [None, self.batch_norm.num_features]
+    
+    def get_output_shape(self) -> List[int]:
+        """
+        Get the expected output shape for this model.
+        
+        Returns:
+            List representing the output shape [batch_size, output_features]
+        """
+        return [None, self.linear.out_features]
 
 
 # %%
-# Create and train the model
+
+# Create and train the model using the locally defined model class
 model = LinearRegressionModel()
 model.y_mean = y.mean(dim=0, keepdim=True)
 model.y_std = y.std(dim=0, keepdim=True)
+
+device = 'cpu' # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 X.to(device)
 y.to(device)
@@ -305,7 +350,7 @@ criterion = torch.nn.MSELoss() # Mean Squared Error
 optimizer = torch.optim.SGD(model.parameters(), lr=.05)
 
 # Train the model
-num_epochs = 150
+num_epochs = 100
 for epoch in range(num_epochs):
     model.train()
     # Forward pass
@@ -608,3 +653,411 @@ finally:
     # Clean up
     import shutil
     shutil.rmtree(download_dir, ignore_errors=True)
+
+# %%
+# Implementing a Polynomial Regression Model
+class PolynomialRegressionModel(torch.nn.Module):
+    def __init__(self, degree=2):
+        super(PolynomialRegressionModel, self).__init__()
+        self.degree = degree
+        
+        # Calculate number of polynomial features for 2 input features with degree n
+        # For 2 features with degree 2: x1, x2, x1^2, x1*x2, x2^2 = 5 features
+        n_poly_features = int((degree + 1) * (degree + 2) / 2) - 1  # -1 because we start from degree 1, not 0
+        
+        # Apply batch normalization to expanded polynomial features
+        self.batch_norm = torch.nn.BatchNorm1d(n_poly_features)
+        
+        # Linear layer now accepts polynomial features as input
+        self.linear = torch.nn.Linear(n_poly_features, 1)
+        
+        # Register buffers to store the mean and standard deviation of the output features
+        self.register_buffer('y_mean', torch.zeros(1))
+        self.register_buffer('y_std', torch.ones(1))
+
+    def _polynomial_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Generate polynomial features up to the specified degree.
+        For input [x1, x2], with degree=2, this generates [x1, x2, x1^2, x1*x2, x2^2]
+        """
+        batch_size = x.shape[0]
+        x1 = x[:, 0].view(-1, 1)
+        x2 = x[:, 1].view(-1, 1)
+        
+        # Start with degree 1 terms (original features)
+        poly_features = [x1, x2]
+        
+        # Add higher degree terms
+        for d in range(2, self.degree + 1):
+            for i in range(d + 1):
+                # Add term x1^(d-i) * x2^i
+                term = torch.pow(x1, d-i) * torch.pow(x2, i)
+                poly_features.append(term)
+        
+        # Concatenate all features
+        return torch.cat(poly_features, dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Transform input to polynomial features
+        x_poly = self._polynomial_features(x)
+        
+        # Apply batch normalization
+        x_normalized = self.batch_norm(x_poly)
+        
+        # Apply linear transformation
+        output = self.linear(x_normalized)
+        
+        # Denormalize output during inference
+        if not self.training:
+            with torch.no_grad():
+                output = output * self.y_std + self.y_mean
+                
+        return output
+
+# %%
+# Create and train the polynomial regression model
+poly_model = PolynomialRegressionModel(degree=6)  # Using degree 3 polynomial
+poly_model.y_mean = y.mean(dim=0, keepdim=True)
+poly_model.y_std = y.std(dim=0, keepdim=True)
+poly_model.to(device)
+
+# Loss function and optimizer
+criterion = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(poly_model.parameters(), lr=0.01)
+
+# Train the model
+num_epochs = 5500
+for epoch in range(num_epochs):
+    poly_model.train()
+    # Forward pass
+    y_predicted = poly_model(X)
+    loss = criterion(y_predicted, (y - poly_model.y_mean) / poly_model.y_std)
+    
+    # Backward and optimize
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    if (epoch) % 100 == 0:
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+# %%
+# Calculate loss for comparison with linear model
+with torch.no_grad():
+    linear_pred = model(X)
+    linear_loss = criterion(linear_pred, (y - model.y_mean) / model.y_std).item()
+    
+    poly_pred = poly_model(X)
+    poly_loss = criterion(poly_pred, (y - poly_model.y_mean) / poly_model.y_std).item()
+
+print(f"Linear Regression Loss: {linear_loss:.6f}")
+print(f"Polynomial Regression Loss: {poly_loss:.6f}")
+print(f"Improvement: {(1 - poly_loss/linear_loss) * 100:.2f}%")
+
+# %%
+# Visualize the polynomial regression model's predictions
+poly_model.eval()
+model.eval()
+
+# Create a grid of points for visualization
+grid_size = 30
+x1_range = np.linspace(X[:,0].min(), X[:,0].max(), grid_size)
+x2_range = np.linspace(X[:,1].min(), X[:,1].max(), grid_size)
+X1, X2 = np.meshgrid(x1_range, x2_range)
+
+# Flatten the grid points for prediction
+grid_points = np.column_stack([X1.flatten(), X2.flatten()])
+grid_tensor = torch.tensor(grid_points, dtype=torch.float32)
+
+# Get predictions from both models
+with torch.no_grad():
+    poly_predictions = poly_model(grid_tensor).cpu().numpy().reshape(grid_size, grid_size)
+    linear_predictions = model(grid_tensor).cpu().numpy().reshape(grid_size, grid_size)
+
+# Create 3D visualization comparing both models
+fig = make_subplots(
+    rows=1, 
+    cols=2,
+    specs=[[{'type': 'scene'}, {'type': 'scene'}]],
+    subplot_titles=["Linear Regression Surface", "Polynomial Regression Surface"]
+)
+
+# Sample a subset of data points for visualization
+sample_indices = np.random.choice(len(X), size=min(300, len(X)), replace=False)
+sample_features = X[sample_indices]
+sample_targets = y[sample_indices]
+
+# Add data points to both subplots
+for i in range(1, 3):
+    fig.add_trace(
+        go.Scatter3d(
+            x=sample_features[:,0],
+            y=sample_features[:,1],
+            z=sample_targets.flatten(),
+            mode='markers',
+            marker=dict(
+                size=3,
+                color='red',
+                opacity=0.5
+            ),
+            name='Data Points',
+            showlegend=False,
+            hovertemplate='CQI: %{x:.2f}<br>Throughput: %{y:.2f} Mbps<br>min_prb_ratio: %{z:.2f}<extra></extra>'
+        ),
+        row=1, col=i
+    )
+
+# Add linear regression surface
+fig.add_trace(
+    go.Surface(
+        x=X1, 
+        y=X2, 
+        z=linear_predictions,
+        colorscale='Blues',
+        opacity=0.7,
+        showscale=False,
+        name='Linear Regression'
+    ),
+    row=1, col=1
+)
+
+# Add polynomial regression surface
+fig.add_trace(
+    go.Surface(
+        x=X1, 
+        y=X2, 
+        z=poly_predictions,
+        colorscale='Greens',
+        opacity=0.7,
+        showscale=False,
+        name='Polynomial Regression'
+    ),
+    row=1, col=2
+)
+
+# Update layout
+fig.update_layout(
+    title='Comparison of Linear vs. Polynomial Regression Models',
+    height=600,
+    width=1200,
+)
+
+# Update scene settings for both subplots
+for i in range(1, 3):
+    fig.update_scenes(
+        xaxis_title='CQI',
+        yaxis_title='Throughput (Mbps)',
+        zaxis_title='min_prb_ratio',
+        aspectmode='auto',
+        row=1, col=i
+    )
+
+fig.show()
+
+# %%
+# Save the polynomial regression model to ONNX and upload to Hugging Face
+poly_model_name = "polynomial_regression_model"
+poly_model_version = "1.0.0"  # First version
+
+# Calculate loss as a metric
+with torch.no_grad():
+    poly_pred = poly_model(X)
+    poly_loss = criterion(poly_pred, (y - poly_model.y_mean) / poly_model.y_std).item()
+
+# Metadata with polynomial degree information
+poly_metadata_props = {
+    "version": poly_model_version,
+    "training_date": datetime.datetime.now().isoformat(),
+    "framework": f"PyTorch {torch.__version__}",
+    "dataset": "network_metrics_exp_1741030459",
+    "metrics": json.dumps({"mse": poly_loss}),
+    "description": f"Polynomial regression model (degree {poly_model.degree}) for PRB prediction based on CQI and throughput",
+    "input_features": json.dumps(["CQI", "DRB.UEThpDl"]),
+    "output_features": json.dumps(["min_prb_ratio"]),
+    "polynomial_degree": poly_model.degree,
+    "model_type": "polynomial_regression"
+}
+
+# Create temp directory
+poly_temp_dir = tempfile.mkdtemp()
+poly_model_path = os.path.join(poly_temp_dir, f"{poly_model_name}_v{poly_model_version}.onnx")
+
+# Export the model to ONNX
+dummy_input = torch.randn(1, 2)  # Example input
+torch.onnx.export(
+    poly_model, 
+    dummy_input, 
+    poly_model_path, 
+    verbose=True, 
+    input_names=["input"], 
+    output_names=["output"], 
+    dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
+)
+
+# Create repository for polynomial model
+poly_model_repo = f"cyberpowder/{poly_model_name}_v{poly_model_version}"
+
+# Create metadata JSON file
+poly_metadata_path = os.path.join(poly_temp_dir, f"{poly_model_name}_v{poly_model_version}_metadata.json")
+with open(poly_metadata_path, 'w') as f:
+    json.dump(poly_metadata_props, f, indent=2)
+
+# Create or ensure repository exists
+try:
+    hf_api.create_repo(poly_model_repo, private=True, token=HF_TOKEN)
+    print(f"Created new repository: {poly_model_repo}")
+except Exception as e:
+    print(f"Repository may already exist or error creating it: {e}")
+
+# Upload ONNX model to Hugging Face
+print(f"Uploading polynomial ONNX model to Hugging Face: {poly_model_repo}")
+hf_api.upload_file(
+    path_or_fileobj=poly_model_path,
+    repo_id=poly_model_repo,
+    path_in_repo=f"{poly_model_name}_v{poly_model_version}.onnx",
+    token=HF_TOKEN
+)
+
+# Upload metadata to Hugging Face
+print(f"Uploading polynomial model metadata to Hugging Face: {poly_model_repo}")
+hf_api.upload_file(
+    path_or_fileobj=poly_metadata_path,
+    repo_id=poly_model_repo,
+    path_in_repo=f"{poly_model_name}_v{poly_model_version}_metadata.json",
+    token=HF_TOKEN
+)
+
+print(f"Polynomial model and metadata successfully uploaded to Hugging Face: {poly_model_repo}")
+
+# %%
+# Download and use the polynomial model from Hugging Face
+poly_model_repo = f"cyberpowder/{poly_model_name}_v{poly_model_version}"
+poly_model_filename = f"{poly_model_name}_v{poly_model_version}.onnx"
+poly_metadata_filename = f"{poly_model_name}_v{poly_model_version}_metadata.json"
+
+# List files in the repo to confirm upload was successful
+print(f"Files in repository {poly_model_repo}:")
+model_files = hf_api.list_repo_files(poly_model_repo, token=HF_TOKEN)
+for file in model_files:
+    print(f"  - {file}")
+
+# Create temporary directory for downloaded files
+poly_download_dir = tempfile.mkdtemp()
+
+try:
+    # Download model from Hugging Face
+    print(f"\nDownloading polynomial model from Hugging Face...")
+    poly_model_path = hf_hub_download(
+        repo_id=poly_model_repo,
+        filename=poly_model_filename,
+        token=HF_TOKEN,
+        local_dir=poly_download_dir
+    )
+    
+    # Download metadata
+    print(f"Downloading polynomial model metadata from Hugging Face...")
+    poly_metadata_path = hf_hub_download(
+        repo_id=poly_model_repo,
+        filename=poly_metadata_filename,
+        token=HF_TOKEN,
+        local_dir=poly_download_dir
+    )
+    
+    # Load metadata
+    with open(poly_metadata_path, 'r') as f:
+        poly_metadata = json.load(f)
+    
+    print(f"\nPolynomial model metadata:")
+    print(f"  Version: {poly_metadata.get('version')}")
+    print(f"  Polynomial degree: {poly_metadata.get('polynomial_degree')}")
+    print(f"  Description: {poly_metadata.get('description')}")
+    print(f"  Framework: {poly_metadata.get('framework')}")
+    print(f"  Metrics: {poly_metadata.get('metrics')}")
+    
+    # Load model with ONNX Runtime
+    print(f"\nLoading polynomial model for inference...")
+    poly_session = ort.InferenceSession(poly_model_path)
+    
+    # Sample data for inference (same samples as used for linear model)
+    sample_inputs = [
+        [5.0, 20.0],   # Low CQI, low throughput
+        [10.0, 50.0],  # Medium CQI, medium throughput
+        [15.0, 100.0], # High CQI, high throughput
+        [8.0, 80.0],   # Medium-low CQI, medium-high throughput
+        [12.0, 30.0]   # Medium-high CQI, medium-low throughput
+    ]
+    
+    input_tensor = np.array(sample_inputs, dtype=np.float32)
+    
+    # Run inference with polynomial model
+    print(f"\nRunning inference with polynomial model...")
+    poly_outputs = poly_session.run(None, {"input": input_tensor})
+    
+    # Run inference with linear model for comparison
+    print(f"Loading linear model for comparison...")
+    linear_session = ort.InferenceSession(model_path)
+    linear_outputs = linear_session.run(None, {"input": input_tensor})
+    
+    # Print results as a table with both models
+    print("\nComparison of Prediction Results:")
+    print("-----------------------------------------------------------------------------------")
+    print("   CQI   | Throughput (Mbps) | Linear Model Prediction | Polynomial Model Prediction")
+    print("-----------------------------------------------------------------------------------")
+    for i, sample in enumerate(sample_inputs):
+        print(f"  {sample[0]:5.1f}  |      {sample[1]:7.1f}     |        {linear_outputs[0][i][0]:7.2f}        |          {poly_outputs[0][i][0]:7.2f}")
+    print("-----------------------------------------------------------------------------------")
+    
+    # Create a comparison visualization
+    fig = go.Figure()
+    
+    # Add points for the linear model predictions
+    fig.add_trace(go.Scatter3d(
+        x=[sample[0] for sample in sample_inputs],  # CQI
+        y=[sample[1] for sample in sample_inputs],  # Throughput
+        z=[pred[0] for pred in linear_outputs[0]],  # Predicted min_prb_ratio
+        mode='markers',
+        marker=dict(
+            size=8,
+            color='blue',
+            symbol='circle'
+        ),
+        name='Linear Model Predictions',
+        hovertemplate='CQI: %{x:.1f}<br>Throughput: %{y:.1f} Mbps<br>Predicted PRB: %{z:.1f}%<extra></extra>'
+    ))
+    
+    # Add points for the polynomial model predictions
+    fig.add_trace(go.Scatter3d(
+        x=[sample[0] for sample in sample_inputs],  # CQI
+        y=[sample[1] for sample in sample_inputs],  # Throughput
+        z=[pred[0] for pred in poly_outputs[0]],    # Predicted min_prb_ratio
+        mode='markers',
+        marker=dict(
+            size=8,
+            color='green',
+            symbol='diamond'
+        ),
+        name='Polynomial Model Predictions',
+        hovertemplate='CQI: %{x:.1f}<br>Throughput: %{y:.1f} Mbps<br>Predicted PRB: %{z:.1f}%<extra></extra>'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title=f"Comparison of Linear vs. Polynomial Model Predictions",
+        scene=dict(
+            xaxis_title='CQI',
+            yaxis_title='Throughput (Mbps)',
+            zaxis_title='min_prb_ratio (%)',
+        ),
+        width=800,
+        height=600
+    )
+    
+    fig.show()
+    
+except Exception as e:
+    print(f"Error using polynomial model from Hugging Face: {e}")
+    
+finally:
+    # Clean up
+    import shutil
+    shutil.rmtree(poly_download_dir, ignore_errors=True)
