@@ -1,5 +1,7 @@
 # PyTorch AI/ML Workflow
 
+#TODO move some of to the individual service READMEs.
+
 This POWDER profile implements a complete AI/ML workflow using PyTorch for training and inference in a microservices architecture orchestrated with docker compose. It provides a modular and containerized solution for data generation, model training, model storage, and inference using POWDER resources. Currently, this workflow only targets the POWDER testbed RF attenuator matrix, but will later be modularized and extended to cover other deployment environments.
 
 ## Architecture
@@ -86,10 +88,9 @@ Note: this service depends on the model-server and inference-server services, an
 You can now access the Jupyter notebook environment at http://localhost:8888 using the web-based VNC client provided by POWDER. Here you will find a notebook with examples for data analysis, model creation, training, and export to the model-server.
 
 #TODO add more detailed instructions and examples including the use of the cloud-based model and dataset storage
-
 #TODO port instructions to profile documentation
 
-**Below is even more WIP than above**
+# **Below is even more WIP than above**
 
 ### Running the Services
 
@@ -242,7 +243,7 @@ command: python /app/run_experiment.py --mode=test
 
 OpenAPI/Swagger specifications are available for both servers:
 
-- Model Server API: http://localhost:5001/apidocs/
-- Inference Server API: http://localhost:5002/apidocs/
+- Model Server API: ./model-server/openapi.yaml
+- Inference Server API: ./inference-server/openapi.yaml
 
 These specifications document all available endpoints, request/response schemas, and include examples.
