@@ -1,6 +1,6 @@
 # PyTorch AI/ML Workflow
 
-This project implements a complete AI/ML workflow using PyTorch for training and inference in a microservices architecture. It provides a modular and containerized solution for data generation, model training, model storage, and inference.
+This POWDER profile implements a complete AI/ML workflow using PyTorch for training and inference in a microservices architecture orchestrated with docker compose. It provides a modular and containerized solution for data generation, model training, model storage, and inference using POWDER resources. Currently, this workflow only targets the POWDER testbed RF attenuator matrix, but will later be modularized and extended to cover other deployment environments.
 
 ## Architecture
 
@@ -8,44 +8,88 @@ The project consists of the following components:
 
 ```mermaid
 flowchart TD
-    ER[Experiment Runner] --> MS[Model Server]
-    ER --> IS[Inference Server]
+    ER[Experiment Runner] <--> MS[Model Server]
+    ER <--> IS[Inference Server]
     ER --> IDB[InfluxDB]
     AT[Analysis & Training] --> MS
-    AT --> IDB
-    IS --> MS
-    AT -- Alternative Path --> HF[Hugging Face]
-    IS -- Alternative Path --> HF
-    MS --> SU[Shared Utilities]
-    IS --> SU
+    AT <-- IDB
+    IS <--> MS
+    AT -- Alternative Path <--> HF[Hugging Face]
+    IS -- Alternative Path <--> HF
 ```
 
-1. **Model Server** - Stores and serves trained PyTorch models converted to ONNX format
-2. **Inference Server** - Provides an API for making predictions using the models
+1. **Experiment Runner** - Tool for running end-to-end 5G experiments to generate datasets 
 3. **Analysis and Training Environment** - Jupyter notebook environment for data analysis and model creation/training
-4. **Experiment Runner** - Tool for running end-to-end tests of the workflow
+1. **Model Server** - Stores and serves trained PyTorch models exported to ONNX runtime format
+2. **Inference Server** - Provides an API for making predictions using the models stored at the model server
 5. **InfluxDB** - Time series database for storing metrics and experiment data
 6. **Shared Utilities** - Common ML functions and models shared between components
 
 ## Key Features
 
 - Complete, reproducible AI/ML workflow from data generation to inference
-- Model versioning system using semantic versioning principles
-- Separate model metadata storage for improved flexibility
-- ONNX format for model interoperability across components
-- Containerized deployment with Docker Compose
+- Model versioning with metadata storage
+- ONNX format for model interoperability and export
+- Containerized deployment orchestrated with docker compose
 - Hybrid storage strategy supporting both local (Model Server) and cloud-based (Hugging Face) options
-- Comprehensive testing infrastructure with isolated test environments
-- Dynamic model input shape detection for flexible input handling
-- Shared utilities module for consistent model definition and training across components
 
 ## Getting Started
 
+All services are run at the `ric` node in the associated experiment. The Experiment Runner is run locally in that node (not in a container) and requires SSH forwarding for controlling the other nodes in the experiment.
+
 ### Prerequisites
 
-- Docker and Docker Compose
-- Python 3.10+
-- Network connectivity between components
+Prior to instantiating your experiment you need to:
+
+1. Add your SSH public key to your POWDER account
+2. Enable SSH agent forwarding for your SSH client
+
+### Generating data with the experiment runner
+
+Note: The experiment runner is currently designed to run a single type of experiment. I.e., one where the the slice PRB allocation and RF attenuation parameters are changed over time to generate a dataset.
+
+Once your experiment becomes ready. Use SSH to login to the `ric` node.
+
+You can run a short test experiment with:
+
+```bash
+cd experiment-runner
+./runner --config=test
+```
+
+Or a more extended version of the same experiment with:
+
+```bash
+cd experiment-runner
+./runner --config=default
+```
+
+This will:
+
+1. Start the required services for data collection (InfluxDB and a patched version of srsRAN's OSC RIC) on the `ric` node
+2. Start an Open5GS core network on the `cn5g` node with two iperf3 servers
+3. Start an srsRAN monolithic CU/DU on the `cudu` node
+4. Attach two COTS UEs to the network and start their iperf3 clients to generate heavy downlink traffic
+5. Start the data collection xApp which subscribes to KPIs and presents a RESTFul API to get the latest KPIs and update the slice PRB ratios for the slices
+6. Iterates through the attenuator settings and slice settings defined in the experiment configuration 
+
+### Data analysis/cleaning and model creation/training/export
+
+In an SSH session on the `ric` node:
+
+```bash
+cd /local/repository/simple-aiml-workflow
+sudo docker compose up analysis-and-training
+```
+Note: this service depends on the model-server and inference-server services, and will start them if they are not already running.
+
+You can now access the Jupyter notebook environment at http://localhost:8888 using the web-based VNC client provided by POWDER. Here you will find a notebook with examples for data analysis, model creation, training, and export to the model-server.
+
+#TODO add more detailed instructions and examples including the use of the cloud-based model and dataset storage
+
+#TODO port instructions to profile documentation
+
+**Below is even more WIP than above**
 
 ### Running the Services
 
@@ -61,7 +105,7 @@ This will:
 3. Build and start the Jupyter notebook server on port 8888
 4. Start InfluxDB for storing metrics and experiment data
 
-**Note:** All Docker commands must be run with `sudo` due to permission requirements.
+**Note:** All Docker commands must be run with `sudo` atm. This will be fixed in future versions.
 
 ### Running Components Individually
 
@@ -77,13 +121,6 @@ sudo docker compose up -d analysis-and-training
 
 ## Using the Project
 
-### Generating data with the experiment runner
-You can run a test experiment with:
-
-```bash
-cd experiment-runner
-./runner --config=test
-```
 
 ### Training a Model
 
@@ -91,6 +128,10 @@ cd experiment-runner
 2. Open `analysis-and-training/notebooks/playground.py` to use as a starting point for data analysis and model creation/training/export
 3. Models are exported to ONNX format for interoperability between components
 4. Model metadata is extracted and stored separately alongside the model file
+
+### Model/Inference Server API examples
+
+Currently, all services are run 
 
 ### Making Predictions
 
