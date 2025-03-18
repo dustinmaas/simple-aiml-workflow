@@ -29,7 +29,7 @@ if __name__ == '__main__':
     # Get configuration from environment
     debug_mode = os.environ.get('DEBUG', 'False').lower() == 'true'
     host = os.environ.get('HOST', '0.0.0.0')
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('INFERENCE_SERVER_PORT', 80))
     
     logger.info(f"Starting inference server on {host}:{port} (debug={debug_mode})")
     app.run(host=host, port=port, debug=debug_mode)

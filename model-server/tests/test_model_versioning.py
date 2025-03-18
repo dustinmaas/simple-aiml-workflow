@@ -33,8 +33,8 @@ from shared.ml_utils import (
     get_default_metadata
 )
 
-# Model server URL (default when running inside the container)
-MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
+# Import constants for server URL
+from utils.constants import MODEL_SERVER_URL
 
 def create_and_export_model(model_name, version):
     """Create a LinearRegressionModel and export it to ONNX format."""

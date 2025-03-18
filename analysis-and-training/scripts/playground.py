@@ -36,7 +36,7 @@ from influxdb_client import InfluxDBClient
 
 # Connect to InfluxDB using environment variables
 client = InfluxDBClient(
-    url="http://metrics_influxdb:8086", 
+    url=f"http://{os.getenv('INFLUXDB_HOST')}:{os.getenv('INFLUXDB_PORT')}", 
     token=os.getenv("INFLUXDB_ADMIN_TOKEN"), 
     org=os.getenv("INFLUXDB_ORG")
 )
@@ -227,8 +227,6 @@ fig.update_traces(
 fig.show()
 
 # %%
-# Using the LinearRegressionModel defined at the top of this notebook
-# Define the LinearRegressionModel class directly in this notebook
 class LinearRegressionModel(torch.nn.Module):
     """
     Linear regression model with batch normalization.
@@ -595,8 +593,8 @@ export_model_to_onnx(
 print(f"ONNX model saved at {temp_model_path} with version {model_version}")
 
 # %%
-# Upload model to model server with versioning - using environment variable
-model_server_url = os.getenv("MODEL_SERVER_URL")
+# Upload model to model server with versioning - using environment variables
+model_server_url = f"http://{os.getenv('MODEL_SERVER_HOST')}:{os.getenv('MODEL_SERVER_PORT')}"
 
 # Send to model server via REST API using the versioned endpoint with metadata
 with open(temp_model_path, 'rb') as f:

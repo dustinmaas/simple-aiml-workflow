@@ -7,8 +7,15 @@ This module defines constants used throughout the inference server.
 
 import os
 
-# Model server URL for retrieving models
-MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://model-server:5000')
+# Model server host and port for retrieving models
+MODEL_SERVER_HOST = os.environ.get('MODEL_SERVER_HOST', 'model-server')
+MODEL_SERVER_PORT = os.environ.get('MODEL_SERVER_PORT', '80')
+MODEL_SERVER_URL = f"http://{MODEL_SERVER_HOST}:{MODEL_SERVER_PORT}"
+
+# Inference server host and port
+INFERENCE_SERVER_HOST = os.environ.get('INFERENCE_SERVER_HOST', 'inference-server')
+INFERENCE_SERVER_PORT = os.environ.get('INFERENCE_SERVER_PORT', '80')
+INFERENCE_SERVER_URL = f"http://{INFERENCE_SERVER_HOST}:{INFERENCE_SERVER_PORT}"
 
 # Local cache directory for models
 MODEL_CACHE_DIR = os.environ.get('MODEL_CACHE_DIR', '/app/cache/models')

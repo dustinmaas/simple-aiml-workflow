@@ -33,8 +33,8 @@ sudo docker compose -f docker-compose.test.yml exec inference-server pytest -xvs
 
 # Clean up models via API
 echo "Cleaning up test models..."
-sudo docker compose -f docker-compose.test.yml exec model-server curl -s -X DELETE "http://localhost:5000/models/test_inference_model"
-sudo docker compose -f docker-compose.test.yml exec model-server curl -s -X DELETE "http://localhost:5000/models/test_versioning_model"
+sudo docker compose -f docker-compose.test.yml exec model-server curl -s -X DELETE "http://localhost:80/models/test_inference_model"
+sudo docker compose -f docker-compose.test.yml exec model-server curl -s -X DELETE "http://localhost:80/models/test_versioning_model"
 
 # Stop test containers
 echo "Stopping test containers..."

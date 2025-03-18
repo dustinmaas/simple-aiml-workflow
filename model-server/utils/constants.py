@@ -16,5 +16,9 @@ MODEL_STORAGE_DIR = os.environ.get('MODEL_STORAGE_DIR', '/data/models')
 # Maximum content length for uploads (50 MB)
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024
 
-# Model Server URL (default when running inside the container)
-MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
+# Model Server Host and Port
+MODEL_SERVER_HOST = os.environ.get('MODEL_SERVER_HOST', 'localhost')
+MODEL_SERVER_PORT = os.environ.get('MODEL_SERVER_PORT', '80')
+
+# Model Server URL (constructed from host and port)
+MODEL_SERVER_URL = f"http://{MODEL_SERVER_HOST}:{MODEL_SERVER_PORT}"

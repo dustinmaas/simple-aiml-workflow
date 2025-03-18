@@ -146,7 +146,7 @@ def main():
                 from inference_server.utils.constants import MODEL_SERVER_URL
                 model_server_url = MODEL_SERVER_URL
             except ImportError:
-                model_server_url = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
+                model_server_url = os.environ.get('MODEL_SERVER_URL', 'http://model-server:80')
     else:
         model_server_url = args.url
     

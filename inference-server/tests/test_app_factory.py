@@ -17,6 +17,9 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
+# Import after updating sys.path
+from utils.constants import MODEL_SERVER_URL
+
 from app_factory import create_app
 
 @pytest.fixture
@@ -25,7 +28,7 @@ def app():
     # Configure app for testing
     test_config = {
         'TESTING': True,
-        'MODEL_SERVER_URL': 'http://localhost:5001',  # Test URL
+        'MODEL_SERVER_URL': MODEL_SERVER_URL,  # Use constant from utils.constants
         'MAX_CONTENT_LENGTH': 1024 * 1024  # 1 MB for testing
     }
     
@@ -65,7 +68,7 @@ def test_blueprint_registration(app):
 def test_app_config(app):
     """Test that app config is properly set."""
     assert app.config['TESTING'] is True
-    assert app.config['MODEL_SERVER_URL'] == 'http://localhost:5001'
+    assert app.config['MODEL_SERVER_URL'] == MODEL_SERVER_URL
     assert app.config['MAX_CONTENT_LENGTH'] == 1024 * 1024
 
 def test_model_service_initialization(app):

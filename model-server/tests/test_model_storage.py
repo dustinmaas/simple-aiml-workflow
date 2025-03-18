@@ -44,7 +44,9 @@ TEST_MODEL_VERSION = "1.0.0"
 TEST_API_MODEL_NAME = "test_api_model"
 TEST_API_MODEL_VERSION = "1.0.0"
 # Make the server URL configurable for container vs. host testing
-TEST_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5000')
+# Use the URL from constants.py instead of hardcoding
+from utils.constants import MODEL_SERVER_URL
+TEST_SERVER_URL = MODEL_SERVER_URL
 
 @pytest.fixture
 def model_path():

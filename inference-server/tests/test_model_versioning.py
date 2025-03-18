@@ -22,9 +22,8 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(os.path.dirname(parent_dir))  # To access shared
 
-# Server URLs
-INFERENCE_SERVER_URL = os.environ.get('INFERENCE_SERVER_URL', 'http://localhost:5000')
-MODEL_SERVER_URL = os.environ.get('MODEL_SERVER_URL', 'http://localhost:5001')
+# Import constants for server URLs
+from utils.constants import INFERENCE_SERVER_URL, MODEL_SERVER_URL
 
 # Import shared test utilities
 from shared.test_utils import (
