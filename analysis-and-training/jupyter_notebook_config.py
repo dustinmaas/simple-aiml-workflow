@@ -7,7 +7,8 @@ c.NotebookApp.ip = '0.0.0.0'
 c.NotebookApp.open_browser = False
 
 # Set the notebook directory
-c.NotebookApp.notebook_dir = '/app/notebooks'
+c.NotebookApp.contents_manager_class = "jupytext.TextFileContentsManager"
+c.ContentsManager.default_jupytext_formats = "ipynb,py:percent"
 
 # Allow remote access without a token or password
 # This is not secure but simplifies development
