@@ -1,7 +1,12 @@
+import os
+
 c = get_config()
 
-# Allow connections from all IP addresses
-c.NotebookApp.ip = '0.0.0.0'
+# Allow connections from configurable IP address
+c.NotebookApp.ip = os.environ.get('JUPYTER_IP', '0.0.0.0')
+
+# Set port from environment variable
+c.NotebookApp.port = int(os.environ.get('JUPYTER_PORT', 8888))
 
 # Don't automatically open a browser
 c.NotebookApp.open_browser = False
