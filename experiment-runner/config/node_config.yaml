@@ -60,7 +60,7 @@ nodes:
       get_docker_logs: cd {RIC_PATH} && sudo docker compose logs > /tmp/final_docker_logs.log
       check_status: cd {RIC_PATH} && sudo docker compose logs --tail=100 | grep 'RMR is ready now'
 
-  metrics_influxdb:
+  datalake_influxdb:
     hostname: ric
     commands:
       start_influxdb: cd {ROOT_COMPOSE_PATH} && sudo docker compose up -d influxdb

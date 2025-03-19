@@ -8,7 +8,7 @@ index 75fcad8..e7ecc3e 100644
  XAPP_PY_RUNNER_IP=10.0.2.20
 +
 +# InfluxDB Time Series Database
-+INFLUXDB_IP=metrics_influxdb
++INFLUXDB_IP=datalake_influxdb
 +INFLUXDB_PORT=8086
 \ No newline at end of file
 diff --git a/docker-compose.yml b/docker-compose.yml

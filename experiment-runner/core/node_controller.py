@@ -185,7 +185,7 @@ class NodeController:
         
         # Stop RIC and related services - xApp is stopped when RIC is stopped
         self.execute_command(node_name="ric", command_name="stop_ric")
-        self.execute_command(node_name="metrics_influxdb", command_name="stop_influxdb")
+        self.execute_command(node_name="datalake_influxdb", command_name="stop_influxdb")
         
         logger.info("All nodes stopped")
 

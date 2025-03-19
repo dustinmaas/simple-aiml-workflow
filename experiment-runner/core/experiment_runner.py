@@ -226,7 +226,7 @@ class ExperimentRunner:
         self.node_controller.execute_command(node_name="cn5g", command_name="stop_iperf_server_2")
         self.node_controller.execute_command(node_name="gnb", command_name="stop_gnb")
         self.node_controller.execute_command(node_name="ric", command_name="stop_ric")
-        self.node_controller.execute_command(node_name="metrics_influxdb", command_name="stop_influxdb")
+        self.node_controller.execute_command(node_name="datalake_influxdb", command_name="stop_influxdb")
 
         # Start core network and iperf servers
         logger.info("Starting core network and iperf servers...")
@@ -292,7 +292,7 @@ class ExperimentRunner:
         
         # Start InfluxDB
         logger.info("Starting InfluxDB...")
-        self.node_controller.execute_command(node_name="metrics_influxdb", command_name="start_influxdb")
+        self.node_controller.execute_command(node_name="datalake_influxdb", command_name="start_influxdb")
         retry_count = 0
         while not self._check_influxdb_running():
             retry_count += 1
