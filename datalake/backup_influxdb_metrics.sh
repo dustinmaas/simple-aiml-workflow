@@ -75,7 +75,7 @@ fi
 
 # Check if container is already running
 CONTAINER_RUNNING=false
-if sudo docker compose ps -q influxdb &> /dev/null; then
+if sudo docker ps | grep -q datalake_influxdb; then
     CONTAINER_RUNNING=true
     echo "InfluxDB container is already running."
 else
@@ -107,22 +107,21 @@ fi
 
 # The backup script is already mounted in the container at /scripts/influxdb_backup.sh
 echo "Using mounted backup script in the container..."
-sudo docker compose exec influxdb chmod +x "/scripts/influxdb_backup.sh"
+sudo docker exec datalake_influxdb chmod +x "/scripts/influxdb_backup.sh"
 
 # Use the mounted backups directory in the container
 CONTAINER_BACKUP_DIR="$CONTAINER_MOUNT_DIR/$(basename "$BACKUP_DIR")"
-sudo docker compose exec influxdb mkdir -p "$CONTAINER_BACKUP_DIR"
+sudo docker exec datalake_influxdb mkdir -p "$CONTAINER_BACKUP_DIR"
 
 # Run backup inside container
 echo "Starting backup process..."
-sudo docker compose exec -it influxdb /scripts/influxdb_backup.sh \
-    --backup-dir "$CONTAINER_BACKUP_DIR" \
+sudo docker exec datalake_influxdb /scripts/influxdb_backup.sh \
+    --backup-dir "$CONTAINER_MOUNT_DIR/$(basename "$BACKUP_DIR")" \
     --bucket "$BUCKET" \
     --org "$ORG"
 
-# Copy backup from container to host
-echo "Copying backup from container to host..."
-sudo docker compose cp "influxdb:$CONTAINER_BACKUP_DIR/." "$BACKUP_DIR"
+# No need to copy - the files are already in the mounted volume directory
+echo "Backup files are available in $BACKUP_DIR"
 
 # Shut down the container if it wasn't running before
 if [ "$CONTAINER_RUNNING" = false ]; then
@@ -132,5 +131,11 @@ if [ "$CONTAINER_RUNNING" = false ]; then
     sudo docker compose down
 fi
 
+# Create/update symlink to latest backup
+LATEST_SYMLINK="./datalake/backups/latest"
+ln -sf "$BACKUP_DIR" "$LATEST_SYMLINK"
+echo "Updated symlink: $LATEST_SYMLINK -> $BACKUP_DIR"
+
 echo "Backup completed successfully and stored in: $BACKUP_DIR"
 echo "To restore this backup, use: ./datalake/restore_influxdb_metrics.sh --backup-dir $BACKUP_DIR"
+echo "Or simply use: ./datalake/restore_influxdb_metrics.sh (will use latest backup)"

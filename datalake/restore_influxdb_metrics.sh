@@ -86,7 +86,7 @@ fi
 
 # Check if container is already running
 CONTAINER_RUNNING=false
-if sudo docker compose ps -q influxdb &> /dev/null; then
+if sudo docker ps | grep -q datalake_influxdb; then
     CONTAINER_RUNNING=true
     echo "InfluxDB container is already running."
 else
@@ -118,7 +118,7 @@ fi
 
 # The restore script is already mounted in the container at /scripts/influxdb_restore.sh
 echo "Using mounted restore script in the container..."
-sudo docker compose exec influxdb chmod +x "/scripts/influxdb_restore.sh"
+sudo docker exec datalake_influxdb chmod +x "/scripts/influxdb_restore.sh"
 
 # If the backup is already in the mounted backups directory, use it directly
 BACKUP_BASE=$(basename "$BACKUP_DIR")
@@ -132,10 +132,10 @@ if [ "$BACKUP_PARENT_BASE" = "backups" ] && [ -d "$BACKUP_DIR" ]; then
 else
     # The backup is elsewhere, copy it to the container
     CONTAINER_BACKUP_DIR="/tmp/influxdb_restore_$(date +%s)"
-    sudo docker compose exec influxdb mkdir -p "$CONTAINER_BACKUP_DIR"
+    sudo docker exec datalake_influxdb mkdir -p "$CONTAINER_BACKUP_DIR"
     
     echo "Copying backup data to container..."
-    sudo docker compose cp "$BACKUP_DIR/." "influxdb:$CONTAINER_BACKUP_DIR"
+    sudo docker cp "$BACKUP_DIR/." "datalake_influxdb:$CONTAINER_BACKUP_DIR"
 fi
 
 # Display backup metadata if it exists
@@ -149,7 +149,7 @@ fi
 echo "Starting restore process..."
 echo "The script will check if the bucket exists and prompt for confirmation if needed"
 
-sudo docker compose exec -it influxdb /scripts/influxdb_restore.sh \
+sudo docker exec -it datalake_influxdb /scripts/influxdb_restore.sh \
     --backup-dir "$CONTAINER_BACKUP_DIR" \
     --bucket "$BUCKET" \
     --org "$ORG"
@@ -157,7 +157,7 @@ sudo docker compose exec -it influxdb /scripts/influxdb_restore.sh \
 # Clean up temporary backup directory if we created one
 if [[ "$CONTAINER_BACKUP_DIR" == /tmp/* ]]; then
     echo "Cleaning up temporary files..."
-    sudo docker compose exec influxdb rm -rf "$CONTAINER_BACKUP_DIR"
+    sudo docker exec datalake_influxdb rm -rf "$CONTAINER_BACKUP_DIR"
 fi
 
 # Shut down the container if it wasn't running before
