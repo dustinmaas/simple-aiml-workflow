@@ -1,104 +1,78 @@
 # Inference Server
 
-The Inference Server provides an API for making predictions using ONNX models retrieved from the Model Server. This version has been updated to align with the new model server architecture, implementing the UUID extraction pattern to handle potential UUID mismatches between database records and storage files. It now also supports dynamic model input shape detection to adapt to different model structures.
+A server that provides an API for making predictions using ONNX models retrieved from the Model Server.
 
 ## Features
 
-- Retrieve models from the Model Server using UUIDs, name/version, or latest version
-- Handle UUID mismatches between database and storage using the extraction pattern
-- Cache models locally to improve performance and reduce load on the Model Server
+- Retrieve models from the Model Server using UUIDs or name/version combinations
+- Cache models locally for improved performance
 - Run inference on ONNX models using ONNXRuntime
-- Return predictions with metadata
-- Automatically detect model input shapes and adapt input formats accordingly
-- Support column vector input format for single-feature models
+- Automatically detect model input shapes and adapt input formats
+- Support for model versioning
 
-## API Documentation
+## Architecture
 
-A complete OpenAPI specification is available in the [openapi.yaml](./openapi.yaml) file, which describes all available endpoints, request/response formats, and examples.
+The Inference Server is built using Flask with these key components:
 
-## UUID Extraction Pattern
+- **Application Factory**: Creates the Flask application (`app_factory.py`)
+- **Routes**: Implements API endpoints (`routes/inference_routes.py`)
+- **Model Service**: Handles model retrieval and caching (`utils/model_service.py`)
+- **Model Cache**: Manages the local model cache (`utils/model_cache.py`)
 
-The Inference Server implements the UUID extraction pattern to handle potential mismatches between database UUIDs and storage UUIDs:
+## API Endpoints
 
-1. When retrieving a model by UUID, the service:
-   - Uses the provided UUID (database UUID) to request the model from the Model Server
-   - Gets model detail information to obtain the file path, which contains the storage UUID
-   - Extracts the storage UUID from the file path (e.g., from "/data/models/[storage_uuid].onnx")
-   - Caches and uses the model file with the extracted storage UUID
-   - Falls back to the database UUID if extraction fails
+See the [OpenAPI specification](./openapi.yaml) for detailed API documentation.
 
-2. This pattern ensures that models can be correctly located and used even when there's a mismatch between the UUID used in the database and the UUID used in the storage filename.
+Key endpoints include:
+- `POST /inference/models/{name}/latest/predict` - Predict using the latest model version
+- `POST /inference/models/{name}/versions/{version}/predict` - Predict using a specific model version
+- `POST /inference/models/uuid/{uuid}/predict` - Predict using a model by UUID
 
-## Model Input Handling
+## Input Format
 
-The Inference Server now implements dynamic model input shape detection:
+The inference server accepts input data in JSON format:
 
-1. When a model is loaded, the ONNX structure is analyzed to determine expected input dimensions
-2. Input data is formatted to match the model's requirements
-3. For single-feature models expecting column vectors, the input format is adjusted accordingly
-4. Fallback strategies are in place when shape information is unavailable
-
-Example input format for a single-feature model:
 ```json
 {
   "input": [[10.0], [100.0]]
 }
 ```
 
-## Testing
+For single-feature models, use column vector format as shown above.
 
-### Automated Testing Workflow
+## Running Tests
 
-The inference-server includes a comprehensive testing framework with a clean environment approach:
+### Using run_tests.sh (Recommended)
 
 ```bash
-# Run tests with clean environment
+cd inference-server/tests
 ./run_tests.sh
 ```
 
-The `run_tests.sh` script:
-1. Stops existing containers
-2. Removes model volumes for a clean slate
-3. Starts containers with fresh volumes
-4. Creates test models using the LinearRegressionModel from playground.py
-5. Runs all tests with detailed output
-6. Cleans up test models when complete
+This script manages the complete test workflow with a clean environment.
 
-### Model Consistency
+### Direct Testing
 
-The testing framework uses the same LinearRegressionModel from playground.py, ensuring consistency between development and testing. This model includes:
+```bash
+# Run all tests
+sudo docker compose exec inference-server pytest /app/tests -v
+```
 
-- Batch normalization on input features
-- Linear regression layer with appropriate dimensions
-- Mean and standard deviation normalization on outputs
+## Environment Variables
 
-This approach ensures that all components work with the same model architecture, providing more reliable test results.
+- `MODEL_SERVER_URL`: URL of the Model Server (default: "http://model-server:5000")
+- `MODEL_CACHE_DIR`: Cache directory for models (default: "/app/cache/models")
+- `REQUEST_TIMEOUT`: Timeout for requests in seconds (default: 30)
+- `MAX_CACHE_SIZE`: Maximum cache size (default: 10)
 
 ## Troubleshooting
 
 ### Model Input Format Issues
-
-If you encounter errors about input dimensions:
-1. Check that your input format matches what the model expects (`{"input": [[10.0], [100.0]]}` for single-feature models)
-2. Ensure you're using the correct input tensor name (typically "input")
-3. For single-feature models, use column vector format where each value is in its own list
+- Check that input format matches what the model expects
+- Use column vector format for single-feature models
+- Ensure input tensor name is correct (typically "input")
 
 ### Model Retrieval Issues
-
-If models can't be retrieved from the Model Server:
-1. Verify that the Model Server is running and accessible
-2. Check if the UUID extraction from file paths is working correctly
-3. Try running `run_tests.sh` to reset and recreate test models
-4. Inspect the model cache directory for any corrupt models
-
-## Configuration
-
-The Inference Server uses environment variables for configuration:
-
-- `MODEL_SERVER_URL` - URL of the Model Server (default: "http://model-server:5000")
-- `MODEL_CACHE_DIR` - Directory to cache downloaded models (default: "/app/cache/models")
-- `REQUEST_TIMEOUT` - Timeout for Model Server requests in seconds (default: 30)
-- `MAX_CACHE_SIZE` - Maximum number of models to keep in cache (default: 10)
-- `HOST` - Host to run the server on (default: "0.0.0.0")
-- `PORT` - Port to run the server on (default: 5000)
-- `DEBUG` - Enable debug mode (default: "False")
+- Verify the Model Server is running and accessible
+- Check if UUID extraction from file paths is working correctly
+- Try using `run_tests.sh` to reset and recreate test models

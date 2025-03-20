@@ -1,19 +1,17 @@
-# Model Server Testing Guide
+# Model Server Tests
 
-This guide explains how to run tests for the model server.
+Tests for the model server component.
 
-## Understanding Test Environment
+## Test Coverage
 
-The model server tests cover various aspects of the system:
+- Database operations (add/retrieve/delete models and metadata)
+- Storage operations (store/retrieve model files)
+- API endpoints
+- Model versioning
 
-1. **Database operations** - Tests for adding, retrieving, and deleting models and metadata
-2. **Storage operations** - Tests for storing and retrieving model files
-3. **API endpoints** - Tests for the REST API functionality
-4. **Model versioning** - Tests for semantic versioning and version management
+## Running the Tests
 
-## Running Tests
-
-The easiest way to run tests is by using the provided script in this directory:
+### Using run_tests.sh (Recommended)
 
 ```bash
 # From the tests directory
@@ -24,13 +22,13 @@ The easiest way to run tests is by using the provided script in this directory:
 ```
 
 This script:
-1. Stops existing test containers
-2. Removes test volumes for a clean slate
-3. Starts containers with fresh volumes
-4. Runs all tests with detailed output
-5. Cleans up when complete
+1. Stops existing containers
+2. Removes volumes for a clean environment
+3. Starts fresh containers
+4. Runs all tests
+5. Cleans up afterward
 
-Alternatively, tests can be run directly against the live Model Server container:
+### Direct Testing
 
 ```bash
 # From the project root
@@ -39,7 +37,8 @@ docker exec simple-aiml-workflow-model-server-1 python -m pytest /app/tests -v
 
 ## Test Implementation
 
-- Tests use temporary files for model creation and then upload them to the model server
-- Tests are designed to clean up after themselves by deleting any models created during testing
-- The container's actual model storage directory is used, with models being clearly named for testing and then deleted
-- Each test is isolated and doesn't depend on the state created by other tests
+Tests use:
+- Temporary files for model creation
+- The container's actual model storage directory
+- Cleanup processes to remove test models
+- Isolated test cases that don't depend on other tests

@@ -1,63 +1,55 @@
-# Datalake Management
+# DataLake Management
 
-## Backup Usage
+Tools for backing up and restoring InfluxDB metrics data.
 
-To backup the InfluxDB network_metrics bucket:
+## Backup and Restore Commands
+
+### Backup
 
 ```bash
 ./datalake/backup_influxdb_metrics.sh [options]
 ```
 
-### Options:
-
-- `-d, --backup-dir DIR`: Directory to store the backup (default: ./datalake/backups/YYYYMMDD_HHMMSS)
-- `-b, --bucket BUCKET`: Bucket name (default: network_metrics)
-- `-o, --org ORG`: Organization name (default: ric)
-- `-h, --help`: Display help message and exit
-
-### Example:
-
-```bash
-./datalake/backup_influxdb_metrics.sh --backup-dir ./datalake/backups/custom_backup
-```
-
-This script will:
-1. Check if the InfluxDB container is running and start it if needed
-2. Execute the backup script already mounted in the container
-3. Stop the container if it wasn't running before
-
-## Restore Usage
-
-To restore the InfluxDB network_metrics bucket:
+### Restore
 
 ```bash
 ./datalake/restore_influxdb_metrics.sh [options]
 ```
 
-This script will:
-1. Check if the InfluxDB container is running and start it if needed
-2. Execute the restore script already mounted in the container (prompting for bucket deletion if needed)
-3. Stop the container if it wasn't running before
+## Common Options
 
-### Options:
-
-- `-d, --backup-dir DIR`: Backup directory (default: ./datalake/backups/latest)
 - `-b, --bucket BUCKET`: Bucket name (default: network_metrics)
 - `-o, --org ORG`: Organization name (default: ric)
 - `-h, --help`: Display help message and exit
 
-### Example:
+## Backup-Specific Options
+
+- `-d, --backup-dir DIR`: Directory to store the backup (default: ./datalake/backups/YYYYMMDD_HHMMSS)
+
+## Restore-Specific Options
+
+- `-d, --backup-dir DIR`: Backup directory to restore from (default: ./datalake/backups/latest)
+
+## Examples
 
 ```bash
-# Basic restore using default options (latest backup)
+# Backup to default location
+./datalake/backup_influxdb_metrics.sh
+
+# Backup to custom location
+./datalake/backup_influxdb_metrics.sh --backup-dir ./datalake/backups/custom_backup
+
+# Restore from latest backup
 ./datalake/restore_influxdb_metrics.sh
 
 # Restore from specific backup
 ./datalake/restore_influxdb_metrics.sh --backup-dir ./datalake/backups/20250318_123456
 ```
 
-This script will:
-1. Check if the InfluxDB container is running and start it if needed
-2. Use the backup directly from the mounted directory if possible
-3. Run the restore script already mounted in the container
-4. Stop the container if it wasn't running before
+## What These Scripts Do
+
+Both scripts will:
+1. Check if the InfluxDB container is running (starting it if needed)
+2. Execute the backup/restore operation
+3. Create a 'latest' symlink to the most recent backup (backup only)
+4. Stop the container if it wasn't running before the operation
