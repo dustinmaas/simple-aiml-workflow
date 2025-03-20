@@ -17,10 +17,10 @@
 # Dataset Analysis and Model Creation/Training
 
 
-1. Brief hugging face intro
-1. Creating and Uploading Datasets to Hugging Face
-1. Downloading Datasets from Hugging Face
-1. Understanding the UE1 Dataset
+1. Brief HuggingFace intro
+1. Creating and uploading datasets to HuggingFace
+1. Downloading datasets from HuggingFace
+1. Analyzing and visualizing the dataset
 1. Linear Regression Model Definition and Training
 1. Linear Regression Hyperplane Fit
 1. (leave as exercise, then go over) Polynomial Regression Model Definition and Training
@@ -28,13 +28,11 @@
 1. Uploading the Polynomial Regression Model to Hugging Face
 1. Testing the Uploaded Polynomial Model
 
-### Notes
+### Prerequisites
 
-- prerequisites
-  - join the Hugging Face cyberpowder organization (supply join link)
-  - reading assignment
-    - Review Section VI of the [NEU ORAN paper](https://utah.instructure.com/courses/1045795/files/170447527?wrap=1) 
-    - [Chapter 2 of Understanding Deep Learning by Simon Prince](https://github.com/udlbook/udlbook/releases/download/v5.00/UnderstandingDeepLearning_11_21_24_C.pdf)
+- Join the HuggingFace CyberPowder organization: [link](https://huggingface.co/organizations/cyberpowder/share/VkAxpCJJIebrTqXgdMFxRElyHhnyAJocHQ)
+- Review Section VI (AI/ML Workflows) of the [NEU ORAN paper](https://utah.instructure.com/courses/1045795/files/170447527?wrap=1) 
+- Read Chapter 2 (Supervised Learning) of [Understanding Deep Learning by Simon Prince](https://github.com/udlbook/udlbook/releases/download/v5.00/UnderstandingDeepLearning_11_21_24_C.pdf)
 - maybe split into separate notebooks for each section; reveal each section as we go through it
 
 """
