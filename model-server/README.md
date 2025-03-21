@@ -8,7 +8,7 @@ A server that stores and serves ONNX models via a REST API, supporting semantic 
 - Support for semantic versioning (major.minor.patch)
 - Separate metadata storage and retrieval
 - UUID-based and name/version-based model access
-- ONNX model validation
+- Simple ONNX model validation
 
 ## Architecture
 
@@ -53,15 +53,3 @@ sudo docker compose exec model-server pytest /app/tests -v
 
 - `MODEL_STORAGE_DIR`: Directory for storing model files (default: `/data/models`)
 - `MODEL_DB_PATH`: Path to the SQLite database file (default: `/data/db/models.db`)
-
-## Troubleshooting
-
-### Model File Not Found Errors
-- Check UUID extraction from file paths
-- Verify volume mounting in Docker configuration
-- Use the `run_tests.sh` script for a clean environment
-
-### Database Method Missing
-- Ensure the ModelDatabase class includes all required methods
-- Check proper method indentation
-- Restart the container after code changes

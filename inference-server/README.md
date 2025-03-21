@@ -6,7 +6,7 @@ A server that provides an API for making predictions using ONNX models retrieved
 
 - Retrieve models from the Model Server using UUIDs or name/version combinations
 - Cache models locally for improved performance
-- Run inference on ONNX models using ONNXRuntime
+- Run inference on ONNX models using ONNX Runtime
 - Automatically detect model input shapes and adapt input formats
 - Support for model versioning
 
@@ -42,14 +42,14 @@ For single-feature models, use column vector format as shown above.
 
 ## Running Tests
 
-### Using run_tests.sh (Recommended)
+### Using run_tests.sh
 
 ```bash
 cd inference-server/tests
 ./run_tests.sh
 ```
 
-This script manages the complete test workflow with a clean environment.
+This script manages the complete test workflow with in a clean environment.
 
 ### Direct Testing
 
@@ -60,19 +60,5 @@ sudo docker compose exec inference-server pytest /app/tests -v
 
 ## Environment Variables
 
-- `MODEL_SERVER_URL`: URL of the Model Server (default: "http://model-server:5000")
+- `MODEL_SERVER_URL`: URL of the Model Server (default: "http://model-server:80")
 - `MODEL_CACHE_DIR`: Cache directory for models (default: "/app/cache/models")
-- `REQUEST_TIMEOUT`: Timeout for requests in seconds (default: 30)
-- `MAX_CACHE_SIZE`: Maximum cache size (default: 10)
-
-## Troubleshooting
-
-### Model Input Format Issues
-- Check that input format matches what the model expects
-- Use column vector format for single-feature models
-- Ensure input tensor name is correct (typically "input")
-
-### Model Retrieval Issues
-- Verify the Model Server is running and accessible
-- Check if UUID extraction from file paths is working correctly
-- Try using `run_tests.sh` to reset and recreate test models

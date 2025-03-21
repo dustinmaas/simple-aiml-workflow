@@ -59,13 +59,6 @@ A script to create test models for both model-server and inference-server compon
 
 Common utilities for testing both model-server and inference-server components.
 
-### Key Features
-
-- Model download and analysis functions
-- Input data formatting based on model shape
-- Server connectivity checks
-- Model and metadata retrieval helpers
-
 ### Usage Example
 
 ```python

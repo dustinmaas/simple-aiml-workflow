@@ -1,4 +1,4 @@
-# PyTorch AI/ML Workflow
+# POWDER Simple AI/ML Workflow with PyTorch
 
 A complete AI/ML workflow using PyTorch for training and inference in a microservices architecture orchestrated with Docker Compose. This project provides a modular and containerized solution for data generation, model training, model storage, and inference.
 
@@ -10,7 +10,7 @@ The project consists of the following components:
 2. **Model Server** - Stores and serves trained PyTorch models exported to ONNX format
 3. **Inference Server** - Provides an API for making predictions using the models
 4. **Analysis and Training** - Jupyter notebook environment for data analysis and model development
-5. **InfluxDB** - Time series database for storing metrics and experiment data
+5. **Data Lake (InfluxDB)** - Time series database for storing metrics and other experiment data
 6. **Shared Utilities** - Common ML functions and models shared between components
 
 ## Key Features
@@ -32,12 +32,12 @@ sudo docker compose up -d
 ```
 
 This will:
-1. Start the model server (port 5000)
-2. Start the inference server (port 5000)
-3. Start the Jupyter notebook server (port 8888)
-4. Start InfluxDB for metrics and experiment data
+1. Start the model server (port 80; docker host port 5001)
+2. Start the inference server (port 80; docker host port 5002)
+3. Start the Jupyter notebook server (port 8888; docker host port 8888)
+4. Start data lake server for storing metrics and experiment data
 
-**Note:** All Docker commands must be run with `sudo` due to permission requirements.
+**Note:** All Docker commands must be run with `sudo` due to permission requirements atm.
 
 ### Running Components Individually
 
@@ -73,7 +73,7 @@ See the [Inference Server README](./inference-server/README.md) for details.
 
 ## Running Tests
 
-### Running All Tests
+### Running service tests
 
 To run all tests in sequence with a clean environment:
 
@@ -111,4 +111,4 @@ For detailed documentation on each component, see:
 - [Analysis and Training](./analysis-and-training/README.md)
 - [Experiment Runner](./experiment-runner/README.md)
 - [Shared Utilities](./shared/README.md)
-- [DataLake](./datalake/README.md)
+- [Data Lake](./datalake/README.md)
