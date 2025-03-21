@@ -49,7 +49,8 @@ Tools for backing up and restoring InfluxDB metrics data.
 ## What These Scripts Do
 
 Both scripts will:
+
 1. Check if the InfluxDB container is running (starting it if needed)
-2. Execute the backup/restore operation
-3. Create a 'latest' symlink to the most recent backup (backup only)
-4. Stop the container if it wasn't running before the operation
+1. Execute the backup/restore operation
+1. Create a 'latest' symlink to the most recent backup (backup only)
+1. Stop the container if it wasn't running before the operation

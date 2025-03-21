@@ -4,12 +4,11 @@ A tool for running end-to-end experiments to generate datasets and orchestrate t
 
 ## Features
 
-- YAML-based configuration for flexible experiment setup
 - Data generation through controlled network experiments
-- Integration with InfluxDB for metrics storage
+- Experiment orchestration and automation with YAML-based configuration for experiment parameters
+- Export of metrics to Data Lake (InfluxDB)
 - Communication with Model Server and Inference Server
-- Support for both data generation and inference modes
-- Experiment orchestration and automation
+- Support for both data generation and inference modes (WIP)
 
 ## Configuration
 
@@ -18,6 +17,7 @@ The Experiment Runner uses YAML configuration files located in the `config/` dir
 - `default.yaml`: Standard configuration with extended experiment parameters
 - `test.yaml`: Shorter test configuration for quick validation
 - `node_config.yaml`: Configuration for node controllers and connections
+  - This file will depend on the powder experiment setup and the experiments you'd like to run
 
 ## Usage
 
