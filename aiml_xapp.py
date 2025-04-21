@@ -44,6 +44,7 @@ class MyXapp(xAppBase):
     def __init__(self, http_server_port, rmr_port):
         super().__init__("", http_server_port, rmr_port)
         self.latest_measurements = {}
+        self.measurements_lock = threading.Lock()
 
     def my_subscription_callback(
         self,
@@ -58,7 +59,9 @@ class MyXapp(xAppBase):
         meas_data = self.e2sm_kpm.extract_meas_data(indication_msg)
         meas_data["colletStartTime"] = indication_hdr["colletStartTime"]
         meas_data["ue_id"] = ue_id
-        self.latest_measurements[ue_id] = meas_data
+        
+        with self.measurements_lock:
+            self.latest_measurements[ue_id] = meas_data
         print(f"Received measurement for UE {ue_id}: {meas_data}")
 
     @xAppBase.start_function
@@ -140,22 +143,33 @@ class AIMLXAppServer:
         self.exp_api_server.logger.info("\nGET /measurements")
         self.exp_api_server.logger.info(f"Query params: {request.args}")
 
-        if ue_id is not None:
-            try:
-                ue_id = str(int(ue_id))  # Validate it's a number and convert to string
-                if ue_id in self.aiml_xapp.latest_measurements:
-                    response = {ue_id: self.aiml_xapp.latest_measurements[ue_id]}
-                    json_response = json.dumps(response, cls=DateTimeEncoder)
-                    self.exp_api_server.logger.info(f"Response: {json_response}")
-                    return json_response, 200, {"Content-Type": "application/json"}
-                else:
-                    self.exp_api_server.logger.error(f"No measurements found for UE {ue_id}")
-                    return jsonify({"error": f"No measurements found for UE {ue_id}"}), 404
-            except ValueError:
-                self.exp_api_server.logger.error("ue_id must be an integer")
-                return jsonify({"error": "ue_id must be an integer"}), 400
+        # Check if aiml_xapp is initialized
+        if not self.aiml_xapp:
+            error_msg = "xApp not initialized"
+            self.exp_api_server.logger.error(error_msg)
+            return jsonify({"error": error_msg}), 503
 
-        response = self.aiml_xapp.latest_measurements
+        with self.aiml_xapp.measurements_lock:
+            if ue_id is not None:
+                try:
+                    ue_id = str(int(ue_id))  # Validate it's a number and convert to string
+                    if ue_id in self.aiml_xapp.latest_measurements:
+                        # Make a copy to avoid race conditions after releasing the lock
+                        measurement_data = self.aiml_xapp.latest_measurements[ue_id].copy()
+                        response = {ue_id: measurement_data}
+                        json_response = json.dumps(response, cls=DateTimeEncoder)
+                        self.exp_api_server.logger.info(f"Response: {json_response}")
+                        return json_response, 200, {"Content-Type": "application/json"}
+                    else:
+                        self.exp_api_server.logger.error(f"No measurements found for UE {ue_id}")
+                        return jsonify({"error": f"No measurements found for UE {ue_id}"}), 404
+                except ValueError:
+                    self.exp_api_server.logger.error("ue_id must be an integer")
+                    return jsonify({"error": "ue_id must be an integer"}), 400
+
+            # Make a copy of the entire dictionary to avoid race conditions
+            response = {k: v.copy() for k, v in self.aiml_xapp.latest_measurements.items()}
+        
         json_response = json.dumps(response, cls=DateTimeEncoder)
         self.exp_api_server.logger.info(f"Response: {json_response}")
         return json_response, 200, {"Content-Type": "application/json"}
@@ -171,6 +185,12 @@ class AIMLXAppServer:
 
         self.exp_api_server.logger.info("\nPOST /update_prb_ratio")
         self.exp_api_server.logger.info(f"Request body: {json.dumps(data, cls=DateTimeEncoder)}")
+        
+        # Check if aiml_xapp is initialized
+        if not self.aiml_xapp:
+            error_msg = "xApp not initialized"
+            self.exp_api_server.logger.error(error_msg)
+            return jsonify({"error": error_msg}), 503
 
         try:
             ue_id = int(data.get("ue_id", DEFAULT_UE_ID))
@@ -225,7 +245,7 @@ class AIMLXAppServer:
         self.aiml_xapp.e2sm_kpm.set_ran_func_id(args.ran_func_id)
         setup_signal_handlers(self.aiml_xapp)
         thread = threading.Thread(
-            target=lambda: self.aiml_xapp.start(
+            target=lambda: self.aiml_xapp and self.aiml_xapp.start(
                 args.e2_node_id, args.kpm_report_style, self.ue_ids, args.metrics.split(",")
             )
         )
@@ -242,25 +262,6 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime.datetime):
             return obj.isoformat()
         return super().default(obj)
-
-
-def validate_prb_params(data):
-    try:
-        ue_id = int(data.get("ue_id", DEFAULT_UE_ID))
-        sst = int(data.get("sst", DEFAULT_SST))
-        sd = int(data.get("sd", DEFAULT_SD))
-        min_prb_ratio = int(data.get("min_prb_ratio", DEFAULT_MIN_PRB_RATIO))
-        max_prb_ratio = int(data.get("max_prb_ratio", DEFAULT_MAX_PRB_RATIO))
-    except (TypeError, ValueError):
-        raise ValueError("Parameters must be integers")
-
-    if sd not in VALID_SD_VALUES:
-        raise ValueError(f"sd must be in {VALID_SD_VALUES}")
-
-    if ue_id not in ue_ids:
-        raise ValueError(f"ue_id must be in {ue_ids}")
-
-    return min_prb_ratio, max_prb_ratio, sd, sst, ue_id
 
 
 def parse_arguments():
@@ -302,7 +303,6 @@ def parse_arguments():
 def setup_signal_handlers(xapp):
     for sig in (signal.SIGQUIT, signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, xapp.signal_handler)
-
 
 
 def main():
