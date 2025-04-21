@@ -2,8 +2,8 @@
 """
 Database manager for UUID-based model storage.
 
-This module provides a SQLite-based database for storing model information and metadata
-with improved connection management, transaction handling, and error reporting.
+This module provides a SQLite-based database for storing model information and
+metadata with connection management, transaction handling, and error reporting.
 """
 
 import os
