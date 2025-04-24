@@ -172,3 +172,5 @@ cython_debug/
 
 # InfluxDB backups
 datalake/backups/
+
+*.lock
