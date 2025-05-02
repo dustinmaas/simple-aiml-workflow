@@ -513,7 +513,7 @@ class InferenceExperimentRunner(ExperimentRunner):
                     # Get latest throughput from measurements
                     actual_thp = self._get_actual_throughput(1)
                     
-                    # Store prediction metrics
+                    # Store prediction metrics (only the last one; after stabilized)
                     self._store_prediction_metrics(
                         ue_id=1,
                         atten=atten,
